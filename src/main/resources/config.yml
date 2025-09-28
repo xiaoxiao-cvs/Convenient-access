@@ -1,0 +1,57 @@
+# ConvenientAccess Plugin Configuration
+
+# HTTP服务器配置
+http:
+  # 是否启用HTTP服务器
+  enabled: true
+  # 监听端口
+  port: 8080
+  # 监听地址 (0.0.0.0 表示所有接口)
+  host: "0.0.0.0"
+  # 最大线程数
+  max-threads: 10
+  # 连接超时时间 (毫秒)
+  timeout: 30000
+
+# API配置
+api:
+  # API版本
+  version: "v1"
+  # 是否启用API认证
+  auth:
+    enabled: false
+    # API密钥 (如果启用认证)
+    api-key: ""
+  # 请求频率限制 (每分钟最大请求数)
+  rate-limit:
+    enabled: true
+    requests-per-minute: 60
+  # 是否启用CORS
+  cors:
+    enabled: true
+    allowed-origins: ["*"]
+
+# 数据缓存配置
+cache:
+  # 服务器基本信息缓存时间 (秒)
+  server-info: 300
+  # 性能数据缓存时间 (秒)
+  performance: 5
+  # 玩家数据缓存时间 (秒)
+  players: 10
+  # 世界数据缓存时间 (秒)
+  worlds: 60
+
+# Spark集成配置
+spark:
+  # 是否优先使用Spark API
+  prefer-spark: true
+  # Spark API超时时间 (毫秒)
+  timeout: 5000
+
+# 日志配置
+logging:
+  # 是否记录API请求日志
+  log-requests: false
+  # 是否记录详细错误信息
+  debug: false

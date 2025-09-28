@@ -1,0 +1,28 @@
+name: ConvenientAccess
+version: 0.1.0
+main: com.xaoxiao.convenientaccess.ConvenientAccessPlugin
+api-version: "1.20"
+author: xaoxiao
+description: A convenient server information access plugin for Minecraft 1.20.1 Arclight servers
+website: https://github.com/xaoxiao/convenient-access
+
+softdepend:
+  - spark
+
+commands:
+  convenientaccess:
+    description: ConvenientAccess plugin commands
+    aliases: [ca, capi]
+    usage: /<command> [reload|status|help]
+    permission: convenientaccess.admin
+
+permissions:
+  convenientaccess.admin:
+    description: Allows access to ConvenientAccess admin commands
+    default: op
+  convenientaccess.api.access:
+    description: Allows access to ConvenientAccess API
+    default: true
+  convenientaccess.api.sensitive:
+    description: Allows access to sensitive server information
+    default: op
