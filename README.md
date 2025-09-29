@@ -69,65 +69,29 @@ logging:
   debug: false         # 是否启用调试模式
 ```
 
-## API 端点
+## API 文档
 
-所有 API 端点都使用 `/api/v1` 前缀：
+ConvenientAccess 提供了完整的 RESTful API 来获取服务器信息。
 
-### 服务器信息
-- `GET /api/v1/server/info` - 获取服务器基本信息
-- `GET /api/v1/server/status` - 获取服务器运行状态
-- `GET /api/v1/server/performance` - 获取服务器性能数据
+📖 **详细的 API 文档请参阅：[API.md](./API.md)**
 
-### 玩家信息
-- `GET /api/v1/players/online` - 获取在线玩家数量
-- `GET /api/v1/players/list` - 获取详细玩家列表
+API 文档包含：
+- 所有可用的 API 端点
+- 详细的请求和响应格式
+- 数据字段说明
+- 使用示例和错误代码
+- 性能数据解释
 
-### 世界信息
-- `GET /api/v1/worlds/list` - 获取世界列表和详细信息
+### 快速开始
 
-### 系统信息
-- `GET /api/v1/system/resources` - 获取系统资源使用情况
-- `GET /api/v1/health` - 健康检查端点
-
-## API 响应格式
-
-所有 API 响应都使用统一的 JSON 格式：
-
-### 成功响应
-```json
-{
-  "success": true,
-  "data": {
-    // 具体数据内容
-  },
-  "timestamp": 1640995200000
-}
-```
-
-### 错误响应
-```json
-{
-  "success": false,
-  "error": "Error Type",
-  "message": "详细错误信息",
-  "timestamp": 1640995200000
-}
-```
-
-## 使用示例
-
-### 获取服务器基本信息
 ```bash
-curl http://localhost:8080/api/v1/server/info
-```
+# 获取服务器状态
+curl http://localhost:8080/api/v1/status
 
-### 获取性能数据
-```bash
-curl http://localhost:8080/api/v1/server/performance
-```
+# 获取性能数据
+curl http://localhost:8080/api/v1/performance
 
-### 获取在线玩家列表
-```bash
+# 获取在线玩家列表
 curl http://localhost:8080/api/v1/players/list
 ```
 

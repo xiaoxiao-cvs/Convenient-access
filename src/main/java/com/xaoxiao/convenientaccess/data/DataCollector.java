@@ -114,6 +114,10 @@ public class DataCollector {
                     threadInfo.put("daemon_count", getDaemonThreadCount());
                     performanceData.put("threads", threadInfo);
                     
+                    // 添加服务器级别的性能指标
+                    Map<String, Object> serverMetrics = getServerMetrics();
+                    performanceData.put("server_metrics", serverMetrics);
+                    
                     // 缓存数据
                     cacheManager.put(CACHE_PERFORMANCE, performanceData, 
                         plugin.getConfigManager().getPerformanceCacheTime());
@@ -129,6 +133,68 @@ public class DataCollector {
                 plugin.getLogger().log(Level.WARNING, "获取性能数据失败", throwable);
                 return getErrorResponse("Failed to get performance data", throwable);
             });
+    }
+    
+    /**
+     * 获取服务器级别的性能指标
+     */
+    private Map<String, Object> getServerMetrics() {
+        Map<String, Object> metrics = new HashMap<>();
+        
+        try {
+            // 实体统计
+            Map<String, Object> entityStats = new HashMap<>();
+            int totalEntities = 0;
+            int totalLivingEntities = 0;
+            int totalPlayers = 0;
+            
+            for (World world : Bukkit.getWorlds()) {
+                totalEntities += world.getEntities().size();
+                totalLivingEntities += world.getLivingEntities().size();
+                totalPlayers += world.getPlayers().size();
+            }
+            
+            entityStats.put("total_entities", totalEntities);
+            entityStats.put("total_living_entities", totalLivingEntities);
+            entityStats.put("total_players", totalPlayers);
+            entityStats.put("non_living_entities", totalEntities - totalLivingEntities);
+            metrics.put("entities", entityStats);
+            
+            // 区块统计
+            Map<String, Object> chunkStats = new HashMap<>();
+            int totalLoadedChunks = 0;
+            
+            for (World world : Bukkit.getWorlds()) {
+                totalLoadedChunks += world.getLoadedChunks().length;
+            }
+            
+            chunkStats.put("total_loaded_chunks", totalLoadedChunks);
+            chunkStats.put("chunks_per_world", totalLoadedChunks / Math.max(1, Bukkit.getWorlds().size()));
+            metrics.put("chunks", chunkStats);
+            
+            // 插件统计
+            Map<String, Object> pluginStats = new HashMap<>();
+            pluginStats.put("total_plugins", Bukkit.getPluginManager().getPlugins().length);
+            pluginStats.put("enabled_plugins", 
+                (int) java.util.Arrays.stream(Bukkit.getPluginManager().getPlugins())
+                    .filter(p -> p.isEnabled())
+                    .count());
+            metrics.put("plugins", pluginStats);
+            
+            // 网络统计（基本信息）
+            Map<String, Object> networkStats = new HashMap<>();
+            networkStats.put("max_players", Bukkit.getMaxPlayers());
+            networkStats.put("online_players", Bukkit.getOnlinePlayers().size());
+            networkStats.put("player_slots_used_percent", 
+                (double) Bukkit.getOnlinePlayers().size() / Bukkit.getMaxPlayers() * 100);
+            metrics.put("network", networkStats);
+            
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "获取服务器指标失败", e);
+            metrics.put("error", e.getMessage());
+        }
+        
+        return metrics;
     }
     
     /**
@@ -218,6 +284,13 @@ public class DataCollector {
                     Map<String, Object> worldInfo = new HashMap<>();
                     worldInfo.put("name", world.getName());
                     worldInfo.put("environment", world.getEnvironment().name());
+                    
+                    // 添加维度信息
+                    Map<String, Object> dimensionInfo = getDimensionInfo(world.getEnvironment());
+                    worldInfo.put("dimension_type", dimensionInfo.get("type"));
+                    worldInfo.put("dimension_name", dimensionInfo.get("name"));
+                    worldInfo.put("dimension_id", dimensionInfo.get("id"));
+                    
                     worldInfo.put("difficulty", world.getDifficulty().name());
                     worldInfo.put("spawn_location", Map.of(
                         "x", world.getSpawnLocation().getX(),
@@ -358,6 +431,38 @@ public class DataCollector {
         error.put("details", throwable.getMessage());
         error.put("timestamp", System.currentTimeMillis());
         return error;
+    }
+    
+    /**
+     * 获取维度信息
+     */
+    private Map<String, Object> getDimensionInfo(World.Environment environment) {
+        Map<String, Object> dimensionInfo = new HashMap<>();
+        
+        switch (environment) {
+            case NORMAL:
+                dimensionInfo.put("type", "overworld");
+                dimensionInfo.put("name", "主世界");
+                dimensionInfo.put("id", 0);
+                break;
+            case NETHER:
+                dimensionInfo.put("type", "the_nether");
+                dimensionInfo.put("name", "下界");
+                dimensionInfo.put("id", -1);
+                break;
+            case THE_END:
+                dimensionInfo.put("type", "the_end");
+                dimensionInfo.put("name", "末地");
+                dimensionInfo.put("id", 1);
+                break;
+            default:
+                dimensionInfo.put("type", "unknown");
+                dimensionInfo.put("name", "未知维度");
+                dimensionInfo.put("id", 999);
+                break;
+        }
+        
+        return dimensionInfo;
     }
     
     /**
