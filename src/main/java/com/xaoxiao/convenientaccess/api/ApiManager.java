@@ -51,12 +51,7 @@ public class ApiManager {
                     return createErrorResponse(429, "Too Many Requests", "请求频率超限");
                 }
                 
-                // 检查认证
-                if (!checkAuthentication(headers)) {
-                    return createErrorResponse(401, "Unauthorized", "认证失败");
-                }
-                
-                // 路由请求
+                // 路由请求（删除认证检查）
                 return routeRequest(path, method).join();
                 
             } catch (Exception e) {
@@ -265,27 +260,6 @@ public class ApiManager {
         int maxRequests = plugin.getConfigManager().getRequestsPerMinute();
         
         return currentCount <= maxRequests;
-    }
-    
-    /**
-     * 检查API认证
-     */
-    private boolean checkAuthentication(Map<String, String> headers) {
-        if (!plugin.getConfigManager().isAuthEnabled()) {
-            return true;
-        }
-        
-        String apiKey = plugin.getConfigManager().getApiKey();
-        if (apiKey == null || apiKey.isEmpty()) {
-            return true; // 如果没有设置API密钥，则跳过认证
-        }
-        
-        String authHeader = headers.get("Authorization");
-        if (authHeader == null) {
-            authHeader = headers.get("X-API-Key");
-        }
-        
-        return apiKey.equals(authHeader);
     }
     
     /**

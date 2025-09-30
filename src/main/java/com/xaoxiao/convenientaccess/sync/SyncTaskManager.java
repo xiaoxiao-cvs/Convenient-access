@@ -70,8 +70,8 @@ public class SyncTaskManager {
         this.taskQueue = new TaskQueue();
         this.conflictResolver = new SyncConflictResolver();
         
-        // 默认白名单文件路径
-        this.whitelistJsonPath = "whitelist.json";
+        // WLP插件兼容路径
+        this.whitelistJsonPath = "plugins/WhitelistPlus/whitelist.json";
     }
     
     /**
@@ -85,11 +85,19 @@ public class SyncTaskManager {
                 File whitelistFile = new File(serverRoot, whitelistJsonPath);
                 this.whitelistJsonPath = whitelistFile.getAbsolutePath();
                 
-                // 启动时执行全量同步
-                scheduleFullSync();
+                logger.info("开始初始化同步任务管理器，白名单文件路径: {}", whitelistJsonPath);
+                
+                // 首次启动时从JSON文件导入数据到数据库（同步执行）
+                boolean importSuccess = importJsonToDatabaseSync();
+                if (!importSuccess) {
+                    logger.warn("JSON导入失败，但继续初始化流程");
+                }
                 
                 // 启动定期任务处理
                 startTaskProcessor();
+                
+                // 启动时执行全量同步（从数据库到JSON）
+                scheduleFullSync();
                 
                 running.set(true);
                 logger.info("同步任务管理器初始化完成，白名单文件路径: {}", whitelistJsonPath);
@@ -574,6 +582,120 @@ public class SyncTaskManager {
     }
     
     /**
+     * 从JSON文件导入数据到数据库
+     */
+    /**
+     * 同步导入JSON数据到数据库（启动时使用）
+     */
+    private boolean importJsonToDatabaseSync() {
+        try {
+            List<WhitelistEntry> jsonEntries = readWhitelistFromJson();
+            if (jsonEntries.isEmpty()) {
+                logger.info("JSON文件为空或不存在，跳过导入");
+                return true; // 空文件不算失败
+            }
+            
+            logger.info("开始从JSON文件同步导入 {} 个白名单条目到数据库", jsonEntries.size());
+            
+            // 同步执行数据库操作
+            try (Connection connection = databaseManager.getConnection()) {
+                connection.setAutoCommit(false);
+                
+                String sql = """
+                    INSERT OR IGNORE INTO whitelist 
+                    (name, uuid, added_by_name, added_by_uuid, source, is_active, created_at, updated_at, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+                
+                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                    LocalDateTime now = LocalDateTime.now();
+                    
+                    for (WhitelistEntry entry : jsonEntries) {
+                        stmt.setString(1, entry.getName());
+                        stmt.setString(2, entry.getUuid());
+                        stmt.setString(3, "System"); // 默认添加者
+                        stmt.setString(4, "00000000-0000-0000-0000-000000000000"); // 系统UUID
+                        stmt.setString(5, "SYSTEM");
+                        stmt.setBoolean(6, true);
+                        stmt.setTimestamp(7, Timestamp.valueOf(now));
+                        stmt.setTimestamp(8, Timestamp.valueOf(now));
+                        stmt.setTimestamp(9, Timestamp.valueOf(now));
+                        stmt.addBatch();
+                    }
+                    
+                    int[] results = stmt.executeBatch();
+                    connection.commit();
+                    
+                    int imported = 0;
+                    for (int result : results) {
+                        if (result > 0) imported++;
+                    }
+                    
+                    logger.info("成功从JSON同步导入 {} 个白名单条目到数据库", imported);
+                    return true;
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("同步导入JSON数据到数据库失败", e);
+            return false;
+        }
+    }
+
+    private void importJsonToDatabase() {
+        try {
+            List<WhitelistEntry> jsonEntries = readWhitelistFromJson();
+            if (jsonEntries.isEmpty()) {
+                logger.info("JSON文件为空或不存在，跳过导入");
+                return;
+            }
+            
+            logger.info("开始从JSON文件导入 {} 个白名单条目到数据库", jsonEntries.size());
+            
+            // 批量插入到数据库
+            databaseManager.executeTransactionAsync(connection -> {
+                String sql = """
+                    INSERT OR IGNORE INTO whitelist 
+                    (name, uuid, added_by_name, added_by_uuid, source, is_active, created_at, updated_at, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+                
+                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                    LocalDateTime now = LocalDateTime.now();
+                    
+                    for (WhitelistEntry entry : jsonEntries) {
+                        stmt.setString(1, entry.getName());
+                        stmt.setString(2, entry.getUuid());
+                        stmt.setString(3, "System"); // 默认添加者
+                        stmt.setString(4, "00000000-0000-0000-0000-000000000000"); // 系统UUID
+                        stmt.setString(5, "JSON_IMPORT");
+                        stmt.setBoolean(6, true);
+                        stmt.setTimestamp(7, Timestamp.valueOf(now));
+                        stmt.setTimestamp(8, Timestamp.valueOf(now));
+                        stmt.setTimestamp(9, Timestamp.valueOf(now));
+                        stmt.addBatch();
+                    }
+                    
+                    int[] results = stmt.executeBatch();
+                    int imported = 0;
+                    for (int result : results) {
+                        if (result > 0) imported++;
+                    }
+                    
+                    logger.info("成功从JSON导入 {} 个白名单条目到数据库", imported);
+                    return imported;
+                }
+            }).exceptionally(throwable -> {
+                logger.error("从JSON导入数据到数据库失败", throwable);
+                return 0;
+            });
+            
+        } catch (Exception e) {
+            logger.error("导入JSON数据时发生异常", e);
+        }
+    }
+
+    /**
      * 从JSON文件读取白名单
      */
     private List<WhitelistEntry> readWhitelistFromJson() {
@@ -581,25 +703,136 @@ public class SyncTaskManager {
         File file = new File(whitelistJsonPath);
         
         if (!file.exists()) {
+            logger.info("白名单JSON文件不存在: {}", whitelistJsonPath);
+            return entries;
+        }
+        
+        if (file.length() == 0) {
+            logger.info("白名单JSON文件为空: {}", whitelistJsonPath);
             return entries;
         }
         
         try (FileReader reader = new FileReader(file)) {
             JsonArray jsonArray = gson.fromJson(reader, JsonArray.class);
-            if (jsonArray != null) {
+            if (jsonArray != null && jsonArray.size() > 0) {
                 for (int i = 0; i < jsonArray.size(); i++) {
-                    JsonObject obj = jsonArray.get(i).getAsJsonObject();
-                    WhitelistEntry entry = new WhitelistEntry();
-                    entry.setUuid(obj.get("uuid").getAsString());
-                    entry.setName(obj.get("name").getAsString());
-                    entries.add(entry);
+                    try {
+                        JsonObject obj = jsonArray.get(i).getAsJsonObject();
+                        
+                        // 验证必需字段
+                        if (!obj.has("uuid") || !obj.has("name")) {
+                            logger.warn("跳过无效的JSON条目（缺少uuid或name字段）: {}", obj);
+                            continue;
+                        }
+                        
+                        String uuid = obj.get("uuid").getAsString();
+                        String name = obj.get("name").getAsString();
+                        
+                        // 验证UUID格式
+                        if (!isValidUuid(uuid)) {
+                            logger.warn("跳过无效的UUID格式: {}", uuid);
+                            continue;
+                        }
+                        
+                        // 验证玩家名格式
+                        if (!isValidPlayerName(name)) {
+                            logger.warn("跳过无效的玩家名格式: {}", name);
+                            continue;
+                        }
+                        
+                        WhitelistEntry entry = new WhitelistEntry();
+                        entry.setUuid(uuid);
+                        entry.setName(name);
+                        
+                        // 设置其他字段的默认值或从JSON读取
+                        if (obj.has("created_at")) {
+                            try {
+                                entry.setCreatedAt(LocalDateTime.parse(obj.get("created_at").getAsString()));
+                            } catch (Exception e) {
+                                logger.debug("解析created_at失败，使用当前时间: {}", e.getMessage());
+                                entry.setCreatedAt(LocalDateTime.now());
+                            }
+                        } else {
+                            entry.setCreatedAt(LocalDateTime.now());
+                        }
+                        
+                        if (obj.has("updated_at")) {
+                            try {
+                                entry.setUpdatedAt(LocalDateTime.parse(obj.get("updated_at").getAsString()));
+                            } catch (Exception e) {
+                                logger.debug("解析updated_at失败，使用当前时间: {}", e.getMessage());
+                                entry.setUpdatedAt(LocalDateTime.now());
+                            }
+                        } else {
+                            entry.setUpdatedAt(LocalDateTime.now());
+                        }
+                        
+                        if (obj.has("source")) {
+                            entry.setSource(obj.get("source").getAsString());
+                        } else {
+                            entry.setSource("manual");
+                        }
+                        
+                        // 设置默认的添加者信息
+                        entry.setAddedByName("System");
+                        entry.setAddedByUuid("00000000-0000-0000-0000-000000000000");
+                        entry.setAddedAt(LocalDateTime.now());
+                        entry.setActive(true);
+                        
+                        entries.add(entry);
+                        
+                    } catch (Exception e) {
+                        logger.warn("解析JSON条目时发生错误，跳过该条目: {}", e.getMessage());
+                    }
                 }
+                logger.info("从JSON文件成功读取到 {} 个有效白名单条目", entries.size());
+            } else {
+                logger.info("JSON文件中没有有效的数组数据");
             }
         } catch (Exception e) {
             logger.error("读取白名单JSON文件失败: {}", whitelistJsonPath, e);
         }
         
         return entries;
+    }
+    
+    /**
+     * 验证UUID格式
+     */
+    private boolean isValidUuid(String uuid) {
+        if (uuid == null || uuid.trim().isEmpty()) {
+            return false;
+        }
+        // 简单的UUID格式验证：8-4-4-4-12
+        return uuid.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    }
+    
+    /**
+     * 验证玩家名格式
+     */
+    private boolean isValidPlayerName(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return false;
+        }
+        
+        // 宽松的玩家名验证规则，兼容历史数据
+        // 允许：字母、数字、下划线、点号、连字符
+        // 长度：1-32个字符（兼容更多情况）
+        if (!name.matches("^[a-zA-Z0-9_.\\-]{1,32}$")) {
+            return false;
+        }
+        
+        // 排除明显无效的格式
+        if (name.equals(".") || name.equals("-") || name.equals("_")) {
+            return false;
+        }
+        
+        // 排除纯符号的名称
+        if (name.matches("^[_.\\-]+$")) {
+            return false;
+        }
+        
+        return true;
     }
     
     /**

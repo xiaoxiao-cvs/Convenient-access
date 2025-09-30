@@ -135,17 +135,12 @@ public class DatabaseManager {
     private void createTables(Connection connection) throws SQLException {
         logger.info("开始创建数据库表...");
         
-        // 读取SQL脚本并执行
+        // 读取SQL脚本并执行（简化版，只保留必要的表）
         String[] sqlScripts = {
             "schema/whitelist.sql",
             "schema/sync_tasks.sql", 
             "schema/operation_log.sql",
             "schema/registration_tokens.sql",
-            "schema/admin_roles.sql",
-            "schema/admin_users.sql",
-            "schema/admin_sessions.sql",
-            "schema/auth_logs.sql",
-            "schema/admin_operation_logs.sql",
             "schema/indexes.sql"
         };
         
@@ -258,29 +253,11 @@ public class DatabaseManager {
     }
     
     /**
-     * 插入初始数据
+     * 插入初始数据（简化版）
      */
     private void insertInitialData(Connection connection) throws SQLException {
-        try {
-            // 插入默认角色
-            String insertRoles = """
-                INSERT OR IGNORE INTO admin_roles (role_name, display_name, permissions) VALUES
-                ('super_admin', '超级管理员', '["*"]'),
-                ('admin', '管理员', '["whitelist:*", "stats:read"]'),
-                ('operator', '操作员', '["whitelist:read", "whitelist:write"]'),
-                ('viewer', '查看者', '["whitelist:read", "stats:read"]')
-            """;
-            
-            try (Statement stmt = connection.createStatement()) {
-                stmt.execute(insertRoles);
-                logger.info("成功插入默认角色数据");
-            }
-        } catch (SQLException e) {
-            logger.warn("插入初始数据时出现错误（可能表不存在）: {}", e.getMessage());
-            // 不抛出异常，允许继续初始化
-        }
-        
-        logger.debug("插入初始数据完成");
+        logger.debug("简化版系统无需插入初始数据");
+        // 简化版系统不需要插入角色等初始数据
     }
     
     /**

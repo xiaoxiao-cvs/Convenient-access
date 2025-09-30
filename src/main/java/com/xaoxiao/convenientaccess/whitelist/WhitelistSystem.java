@@ -1,16 +1,12 @@
 package com.xaoxiao.convenientaccess.whitelist;
 
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
-import com.xaoxiao.convenientaccess.api.AdminApiController;
 import com.xaoxiao.convenientaccess.api.ApiRouter;
+import com.xaoxiao.convenientaccess.api.UserApiController;
 import com.xaoxiao.convenientaccess.api.WhitelistApiController;
-import com.xaoxiao.convenientaccess.auth.AdminAuthManager;
-import com.xaoxiao.convenientaccess.auth.ApiKeyManager;
-import com.xaoxiao.convenientaccess.auth.AuthenticationFilter;
+import com.xaoxiao.convenientaccess.auth.InitialPasswordGenerator;
+import com.xaoxiao.convenientaccess.auth.RegistrationTokenManager;
 import com.xaoxiao.convenientaccess.database.DatabaseManager;
-import com.xaoxiao.convenientaccess.security.RateLimiter;
-import com.xaoxiao.convenientaccess.security.SecurityFilter;
-import com.xaoxiao.convenientaccess.security.SecurityMonitor;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,8 +14,8 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * 白名单管理系统主类（完整版）
- * 整合所有白名单相关组件，包括管理员认证系统和安全防护机制
+ * 白名单管理系统主类（简化版）
+ * 整合核心白名单组件，专注于白名单管理和注册令牌功能
  */
 public class WhitelistSystem {
     private static final Logger logger = LoggerFactory.getLogger(WhitelistSystem.class);
@@ -30,33 +26,28 @@ public class WhitelistSystem {
     private DatabaseManager databaseManager;
     private WhitelistManager whitelistManager;
     private SyncTaskManager syncTaskManager;
-    private ApiKeyManager apiKeyManager;
-    private AdminAuthManager adminAuthManager;
-    
-    // 安全组件
-    private RateLimiter rateLimiter;
-    private SecurityMonitor securityMonitor;
-    private SecurityFilter securityFilter;
+    private RegistrationTokenManager registrationTokenManager;
+    private InitialPasswordGenerator passwordGenerator;
     
     // API组件
     private WhitelistApiController whitelistApiController;
-    private AdminApiController adminApiController;
+    private UserApiController userApiController;
     private ApiRouter apiRouter;
-    private AuthenticationFilter authenticationFilter;
     
     private boolean initialized = false;
+    private String adminPassword = null;
     
     public WhitelistSystem(ConvenientAccessPlugin plugin) {
         this.plugin = plugin;
     }
     
     /**
-     * 初始化白名单系统（完整版）
+     * 初始化白名单系统（简化版）
      */
     public CompletableFuture<Boolean> initialize() {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                logger.info("正在初始化白名单管理系统（完整版）...");
+                logger.info("正在初始化白名单管理系统（简化版）...");
                 
                 // 初始化数据库管理器
                 databaseManager = new DatabaseManager(plugin);
@@ -79,33 +70,21 @@ public class WhitelistSystem {
                     throw new RuntimeException("同步任务管理器初始化失败");
                 }
                 
-                // 初始化API Key管理器
-                apiKeyManager = new ApiKeyManager(databaseManager);
-                boolean apiKeyInit = apiKeyManager.initialize().get();
-                if (!apiKeyInit) {
-                    throw new RuntimeException("API Key管理器初始化失败");
-                }
+                // 初始化注册令牌管理器
+                registrationTokenManager = new RegistrationTokenManager(databaseManager);
                 
-                // 初始化管理员认证管理器
-                adminAuthManager = new AdminAuthManager(databaseManager);
-                boolean adminAuthInit = adminAuthManager.initialize().get();
-                if (!adminAuthInit) {
-                    throw new RuntimeException("管理员认证管理器初始化失败");
-                }
-                
-                // 初始化安全组件
-                rateLimiter = new RateLimiter();
-                securityMonitor = new SecurityMonitor(databaseManager);
-                securityFilter = new SecurityFilter(rateLimiter, securityMonitor);
+                // 生成初始管理员密码
+                passwordGenerator = new InitialPasswordGenerator();
+                adminPassword = passwordGenerator.generatePassword();
+                passwordGenerator.displayPassword(adminPassword);
                 
                 // 初始化API组件
                 whitelistApiController = new WhitelistApiController(whitelistManager, syncTaskManager);
-                adminApiController = new AdminApiController(adminAuthManager);
-                apiRouter = new ApiRouter(whitelistApiController, adminApiController);
-                authenticationFilter = new AuthenticationFilter(apiKeyManager);
+                userApiController = new UserApiController(registrationTokenManager, whitelistManager);
+                apiRouter = new ApiRouter(whitelistApiController, userApiController);
                 
                 initialized = true;
-                logger.info("白名单管理系统（完整版）初始化完成");
+                logger.info("白名单管理系统（简化版）初始化完成");
                 return true;
                 
             } catch (Exception e) {
@@ -122,15 +101,6 @@ public class WhitelistSystem {
         logger.info("正在关闭白名单管理系统...");
         
         try {
-            // 关闭安全组件
-            if (rateLimiter != null) {
-                rateLimiter.shutdown();
-            }
-            
-            if (securityMonitor != null) {
-                securityMonitor.shutdown();
-            }
-            
             // 关闭同步任务管理器
             if (syncTaskManager != null) {
                 syncTaskManager.shutdown();
@@ -161,40 +131,24 @@ public class WhitelistSystem {
         return syncTaskManager;
     }
     
-    public ApiKeyManager getApiKeyManager() {
-        return apiKeyManager;
-    }
-    
-    public AdminAuthManager getAdminAuthManager() {
-        return adminAuthManager;
-    }
-    
-    public RateLimiter getRateLimiter() {
-        return rateLimiter;
-    }
-    
-    public SecurityMonitor getSecurityMonitor() {
-        return securityMonitor;
-    }
-    
-    public SecurityFilter getSecurityFilter() {
-        return securityFilter;
+    public RegistrationTokenManager getRegistrationTokenManager() {
+        return registrationTokenManager;
     }
     
     public WhitelistApiController getWhitelistApiController() {
         return whitelistApiController;
     }
     
-    public AdminApiController getAdminApiController() {
-        return adminApiController;
+    public UserApiController getUserApiController() {
+        return userApiController;
     }
     
     public ApiRouter getApiRouter() {
         return apiRouter;
     }
     
-    public AuthenticationFilter getAuthenticationFilter() {
-        return authenticationFilter;
+    public String getAdminPassword() {
+        return adminPassword;
     }
     
     /**

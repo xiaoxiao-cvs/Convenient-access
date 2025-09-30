@@ -10,18 +10,33 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 
 /**
- * API路由器
- * 处理HTTP请求路由到相应的控制器
+ * API路由器（简化版）
+ * 处理白名单管理和用户注册相关的API路由
  */
 public class ApiRouter extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(ApiRouter.class);
     
     private final WhitelistApiController whitelistController;
-    private final AdminApiController adminController;
+    private final UserApiController userController;
     
-    public ApiRouter(WhitelistApiController whitelistController, AdminApiController adminController) {
+    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController) {
         this.whitelistController = whitelistController;
-        this.adminController = adminController;
+        this.userController = userController;
+    }
+    
+    @Override
+    protected void doPut(HttpServletRequest request, HttpServletResponse response) 
+            throws ServletException, IOException {
+        
+        String path = request.getPathInfo();
+        if (path == null) {
+            path = request.getServletPath();
+        }
+        
+        logger.debug("PUT request to: {}", path);
+        
+        // 目前没有PUT请求的路由
+        send405Response(response, "Method not allowed for this endpoint");
     }
     
     @Override
@@ -33,36 +48,26 @@ public class ApiRouter extends HttpServlet {
             path = request.getServletPath();
         }
         
-        logger.debug("处理GET请求: {}", path);
+        logger.debug("GET request to: {}", path);
         
         try {
-            switch (path) {
-                case "/api/v1/whitelist":
+            // 白名单相关路由
+            if (path.startsWith("/api/v1/whitelist")) {
+                if (path.equals("/api/v1/whitelist")) {
                     whitelistController.handleGetWhitelist(request, response);
-                    break;
-                    
-                case "/api/v1/whitelist/stats":
+                } else if (path.equals("/api/v1/whitelist/stats")) {
                     whitelistController.handleGetStats(request, response);
-                    break;
-                    
-                case "/api/v1/whitelist/sync/status":
+                } else if (path.equals("/api/v1/whitelist/sync/status")) {
                     whitelistController.handleGetSyncStatus(request, response);
-                    break;
-                    
-                case "/api/v1/admin/session":
-                    adminController.handleValidateSession(request, response);
-                    break;
-                    
-                case "/api/v1/admin/profile":
-                    adminController.handleGetProfile(request, response);
-                    break;
-                    
-                default:
-                    send404Response(response, "API端点不存在: " + path);
+                } else {
+                    send404Response(response, "Endpoint not found");
+                }
+            } else {
+                send404Response(response, "API endpoint not found");
             }
         } catch (Exception e) {
-            logger.error("处理GET请求失败: {}", path, e);
-            send500Response(response, "服务器内部错误");
+            logger.error("Error handling GET request to {}", path, e);
+            send500Response(response, "Internal server error");
         }
     }
     
@@ -75,36 +80,36 @@ public class ApiRouter extends HttpServlet {
             path = request.getServletPath();
         }
         
-        logger.debug("处理POST请求: {}", path);
+        logger.debug("POST request to: {}", path);
         
         try {
-            switch (path) {
-                case "/api/v1/whitelist":
-                    whitelistController.handleAddPlayer(request, response);
-                    break;
-                    
-                case "/api/v1/whitelist/batch":
-                    whitelistController.handleBatchOperation(request, response);
-                    break;
-                    
-                case "/api/v1/whitelist/sync":
-                    whitelistController.handleTriggerSync(request, response);
-                    break;
-                    
-                case "/api/v1/admin/login":
-                    adminController.handleLogin(request, response);
-                    break;
-                    
-                case "/api/v1/admin/logout":
-                    adminController.handleLogout(request, response);
-                    break;
-                    
-                default:
-                    send404Response(response, "API端点不存在: " + path);
+            // 白名单相关路由
+             if (path.startsWith("/api/v1/whitelist")) {
+                 if (path.equals("/api/v1/whitelist")) {
+                     whitelistController.handleAddPlayer(request, response);
+                 } else if (path.equals("/api/v1/whitelist/batch")) {
+                     whitelistController.handleBatchOperation(request, response);
+                 } else if (path.equals("/api/v1/whitelist/sync")) {
+                     whitelistController.handleTriggerSync(request, response);
+                 } else {
+                     send404Response(response, "Endpoint not found");
+                 }
+             }
+             // 用户注册路由
+             else if (path.equals("/api/v1/register")) {
+                 userController.handleRegister(request, response);
+             }
+             // 令牌生成路由（简化版，需要管理员密码验证）
+             else if (path.equals("/api/v1/admin/generate-token")) {
+                 // TODO: 需要在UserApiController中添加handleGenerateToken方法
+                 send404Response(response, "Token generation not implemented yet");
+             }
+            else {
+                send404Response(response, "API endpoint not found");
             }
         } catch (Exception e) {
-            logger.error("处理POST请求失败: {}", path, e);
-            send500Response(response, "服务器内部错误");
+            logger.error("Error handling POST request to {}", path, e);
+            send500Response(response, "Internal server error");
         }
     }
     
@@ -117,24 +122,19 @@ public class ApiRouter extends HttpServlet {
             path = request.getServletPath();
         }
         
-        logger.debug("处理DELETE请求: {}", path);
+        logger.debug("DELETE request to: {}", path);
         
         try {
-            if (path.startsWith("/api/v1/whitelist/")) {
-                // 提取UUID参数
-                String[] pathParts = path.split("/");
-                if (pathParts.length >= 5) {
-                    String uuid = pathParts[4];
-                    whitelistController.handleRemovePlayer(request, response, uuid);
-                } else {
-                    send404Response(response, "缺少UUID参数");
-                }
-            } else {
-                send404Response(response, "API端点不存在: " + path);
-            }
+             // 白名单删除路由
+             if (path.startsWith("/api/v1/whitelist/")) {
+                 String uuid = path.substring("/api/v1/whitelist/".length());
+                 whitelistController.handleRemovePlayer(request, response, uuid);
+             } else {
+                 send404Response(response, "Endpoint not found");
+             }
         } catch (Exception e) {
-            logger.error("处理DELETE请求失败: {}", path, e);
-            send500Response(response, "服务器内部错误");
+            logger.error("Error handling DELETE request to {}", path, e);
+            send500Response(response, "Internal server error");
         }
     }
     
@@ -142,27 +142,28 @@ public class ApiRouter extends HttpServlet {
     protected void doOptions(HttpServletRequest request, HttpServletResponse response) 
             throws ServletException, IOException {
         
-        // 处理CORS预检请求
+        // 设置CORS头
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-ID, X-API-Key");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Password");
         response.setHeader("Access-Control-Max-Age", "3600");
         response.setStatus(HttpServletResponse.SC_OK);
     }
     
-    /**
-     * 公共方法：处理请求
-     */
     public void handleRequest(HttpServletRequest request, HttpServletResponse response) 
             throws ServletException, IOException {
         
         String method = request.getMethod();
-        switch (method) {
+        
+        switch (method.toUpperCase()) {
             case "GET":
                 doGet(request, response);
                 break;
             case "POST":
                 doPost(request, response);
+                break;
+            case "PUT":
+                doPut(request, response);
                 break;
             case "DELETE":
                 doDelete(request, response);
@@ -171,43 +172,46 @@ public class ApiRouter extends HttpServlet {
                 doOptions(request, response);
                 break;
             default:
-                send405Response(response, "不支持的请求方法: " + method);
+                send405Response(response, "Method not supported: " + method);
         }
     }
     
-    /**
-     * 发送405响应
-     */
     private void send405Response(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(405);
+        response.setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
         
-        ApiResponse<Object> apiResponse = ApiResponse.error(message);
-        response.getWriter().write(apiResponse.toString());
+        String jsonResponse = String.format(
+            "{\"success\": false, \"error\": {\"code\": 405, \"message\": \"%s\"}, \"timestamp\": %d}",
+            message, System.currentTimeMillis()
+        );
+        
+        response.getWriter().write(jsonResponse);
     }
     
-    /**
-     * 发送404响应
-     */
     private void send404Response(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(404);
+        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
         
-        ApiResponse<Object> apiResponse = ApiResponse.notFound(message);
-        response.getWriter().write(apiResponse.toString());
+        String jsonResponse = String.format(
+            "{\"success\": false, \"error\": {\"code\": 404, \"message\": \"%s\"}, \"timestamp\": %d}",
+            message, System.currentTimeMillis()
+        );
+        
+        response.getWriter().write(jsonResponse);
     }
     
-    /**
-     * 发送500响应
-     */
     private void send500Response(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(500);
+        response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
         
-        ApiResponse<Object> apiResponse = ApiResponse.error(message);
-        response.getWriter().write(apiResponse.toString());
+        String jsonResponse = String.format(
+            "{\"success\": false, \"error\": {\"code\": 500, \"message\": \"%s\"}, \"timestamp\": %d}",
+            message, System.currentTimeMillis()
+        );
+        
+        response.getWriter().write(jsonResponse);
     }
 }

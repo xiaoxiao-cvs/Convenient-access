@@ -5,7 +5,7 @@ http:
   # 是否启用HTTP服务器
   enabled: true
   # 监听端口
-  port: 8080
+  port: 22222
   # 监听地址 (0.0.0.0 表示所有接口)
   host: "0.0.0.0"
   # 最大线程数
@@ -17,19 +17,27 @@ http:
 api:
   # API版本
   version: "v1"
-  # 是否启用API认证
+  # 简化认证配置
   auth:
-    enabled: false
-    # API密钥 (如果启用认证)
-    api-key: ""
+    # 管理员密码（首次启动时自动生成）
+    admin-password: ""
+    # 默认API Token（用于测试）
+    default-token: "test_token_123456"
   # 请求频率限制 (每分钟最大请求数)
   rate-limit:
-    enabled: true
+    enabled: false
     requests-per-minute: 60
   # 是否启用CORS
   cors:
     enabled: true
     allowed-origins: ["*"]
+
+# 白名单管理配置
+whitelist:
+  # 注册令牌默认过期时间 (小时)
+  token-expiry-hours: 24
+  # 是否自动清理过期令牌
+  auto-cleanup-tokens: true
 
 # 数据缓存配置
 cache:
@@ -52,6 +60,6 @@ spark:
 # 日志配置
 logging:
   # 是否记录API请求日志
-  log-requests: false
+  log-requests: true
   # 是否记录详细错误信息
-  debug: false
+  debug: true

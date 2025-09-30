@@ -42,7 +42,7 @@ public class ConfigManager {
     }
     
     public int getHttpPort() {
-        return config.getInt("http.port", 8080);
+        return config.getInt("http.port", 22222);
     }
     
     public String getHttpHost() {

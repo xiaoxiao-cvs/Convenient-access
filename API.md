@@ -2,36 +2,34 @@
 
 ## 概述
 
-ConvenientAccess 提供了一套完整的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。所有 API 端点都返回 JSON 格式的数据，支持多层安全认证和服务器监控。
+ConvenientAccess 提供了一套简洁的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。所有 API 端点都返回 JSON 格式的数据，专注于核心功能和服务器监控。
 
 ## 基础信息
 
-- **基础URL**: `http://your-server:8080/api/v1`
+- **基础URL**: `http://your-server:22222/api/v1`
 - **内容类型**: `application/json`
 - **字符编码**: `UTF-8`
-- **认证方式**: API Key + JWT Token
-- **频率限制**: 60 requests/minute (一般请求), 10 requests/minute (登录请求)
+- **认证方式**: 简化认证（管理员直接操作）
+- **频率限制**: 无特殊限制（适合管理员使用）
 
 ## 🚀 所有可用端点
 
 ### 白名单管理 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | API Key |
-| `/api/v1/whitelist` | POST | 添加白名单条目 | API Key |
-| `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | API Key |
-| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | API Key |
-| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | API Key |
-| `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Key |
-| `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | API Key |
+| `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | 无 |
+| `/api/v1/whitelist` | POST | 添加白名单条目 | 无 |
+| `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | 无 |
+| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | 无 |
+| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | 无 |
+| `/api/v1/whitelist/sync` | POST | 手动触发同步 | 无 |
+| `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | 无 |
 
-### 管理员认证 API
+### 用户注册 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/admin/login` | POST | 管理员登录 | 无 |
-| `/api/v1/admin/logout` | POST | 管理员登出 | JWT Token |
-| `/api/v1/admin/session` | GET | 验证会话有效性 | JWT Token |
-| `/api/v1/admin/profile` | GET | 获取管理员信息 | JWT Token |
+| `/api/v1/register` | POST | 用户注册（使用注册令牌） | 无 |
+| `/api/v1/admin/generate-token` | POST | 生成注册令牌 | 管理员密码 |
 
 ### 服务器监控 API
 | 端点 | 方法 | 描述 | 认证要求 |
@@ -45,25 +43,19 @@ ConvenientAccess 提供了一套完整的 RESTful API，用于管理 Minecraft 1
 | `/api/v1/system/resources` | GET | 获取系统资源信息 | 无 |
 | `/api/v1/health` | GET | 健康检查端点 | 无 |
 
-## 认证机制
+## 简化认证机制
 
-### 1. API Key 认证
-用于基础API访问，在请求头中包含：
-```http
-X-API-Key: your-api-key-here
-```
+### 管理员操作
+对于白名单管理等核心功能，系统采用简化认证：
+- 管理员直接通过Web界面操作
+- 无需复杂的登录流程
+- 适合服务器管理员使用场景
 
-### 2. JWT Token 认证
-用于管理员功能，在请求头中包含：
+### 注册令牌
+用于用户自助注册白名单：
 ```http
-Authorization: Bearer your-jwt-token-here
-```
-
-### 3. 双重认证
-某些敏感操作需要同时提供API Key和JWT Token：
-```http
-X-API-Key: your-api-key-here
-Authorization: Bearer your-jwt-token-here
+# 生成令牌时需要管理员密码验证
+X-Admin-Password: your-admin-password
 ```
 
 ## 响应格式
@@ -221,17 +213,21 @@ Authorization: Bearer your-jwt-token-here
 }
 ```
 
-### 管理员认证 API
+### 令牌管理 API
 
-#### `POST /api/v1/admin/login`
+#### `POST /api/v1/admin/generate-token`
 
-管理员登录。
+生成注册令牌。
+
+**请求头：**
+```http
+X-Admin-Password: your-admin-password
+```
 
 **请求体：**
 ```json
 {
-  "username": "admin",
-  "password": "password123"
+  "expiryHours": 24
 }
 ```
 
@@ -240,30 +236,39 @@ Authorization: Bearer your-jwt-token-here
 {
   "success": true,
   "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "expires_at": "2024-01-01T01:00:00Z",
-    "user": {
-      "id": 1,
-      "username": "admin",
-      "role": "ADMIN",
-      "permissions": ["whitelist:read", "whitelist:write", "system:admin"]
-    }
+    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
+    "expiryHours": 24
   },
+  "message": "注册令牌生成成功",
   "timestamp": 1640995200000
 }
 ```
 
-#### `POST /api/v1/admin/logout`
+### 用户注册 API
 
-管理员登出。
+#### `POST /api/v1/register`
+
+用户注册（使用注册令牌）。
+
+**请求体：**
+```json
+{
+  "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
+  "playerName": "PlayerName",
+  "playerUuid": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
 
 **响应示例：**
 ```json
 {
   "success": true,
   "data": {
-    "message": "登出成功"
+    "playerName": "PlayerName",
+    "playerUuid": "550e8400-e29b-41d4-a716-446655440000",
+    "message": "注册成功，已添加到白名单"
   },
+  "message": "注册成功",
   "timestamp": 1640995200000
 }
 ```
@@ -380,33 +385,27 @@ Authorization: Bearer your-jwt-token-here
 
 ## 使用示例
 
-### 管理员登录并管理白名单
+### 白名单管理示例
 
 ```bash
-# 1. 管理员登录
-curl -X POST http://localhost:8080/api/v1/admin/login \
+# 1. 获取白名单列表
+curl -X GET http://localhost:22222/api/v1/whitelist
+
+# 2. 添加白名单条目
+curl -X POST http://localhost:22222/api/v1/whitelist \
   -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "your-password"
-  }'
-
-# 响应中获取JWT Token
-# {"success":true,"data":{"token":"eyJ..."}}
-
-# 2. 使用Token获取白名单
-curl -X GET http://localhost:8080/api/v1/whitelist \
-  -H "X-API-Key: your-api-key" \
-  -H "Authorization: Bearer eyJ..."
-
-# 3. 添加白名单条目
-curl -X POST http://localhost:8080/api/v1/whitelist \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
   -d '{
     "uuid": "550e8400-e29b-41d4-a716-446655440000",
     "name": "NewPlayer",
     "notes": "新玩家"
+  }'
+
+# 3. 生成注册令牌（需要管理员密码）
+curl -X POST http://localhost:22222/api/v1/admin/generate-token \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Password: your-admin-password" \
+  -d '{
+    "expiryHours": 24
   }'
 ```
 
@@ -414,9 +413,8 @@ curl -X POST http://localhost:8080/api/v1/whitelist \
 
 ```bash
 # 批量添加白名单
-curl -X POST http://localhost:8080/api/v1/whitelist/batch \
+curl -X POST http://localhost:22222/api/v1/whitelist/batch \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
   -d '{
     "entries": [
       {
@@ -431,30 +429,19 @@ curl -X POST http://localhost:8080/api/v1/whitelist/batch \
       }
     ]
   }'
-
-# 批量删除白名单
-curl -X DELETE http://localhost:8080/api/v1/whitelist/batch \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{
-    "uuids": [
-      "550e8400-e29b-41d4-a716-446655440000",
-      "550e8400-e29b-41d4-a716-446655440001"
-    ]
-  }'
 ```
 
 ### 系统监控示例
 
 ```bash
 # 获取服务器状态
-curl -X GET http://localhost:8080/api/v1/server/status
+curl -X GET http://localhost:22222/api/v1/server/status
 
 # 获取服务器性能数据
-curl -X GET http://localhost:8080/api/v1/server/performance
+curl -X GET http://localhost:22222/api/v1/server/performance
 
 # 健康检查（无需认证）
-curl -X GET http://localhost:8080/api/v1/health
+curl -X GET http://localhost:22222/api/v1/health
 ```
 
 ## 版本信息
@@ -475,7 +462,7 @@ curl -X GET http://localhost:8080/api/v1/health
 
 ---
 
-*本文档描述了ConvenientAccess白名单管理系统的完整API接口。系统提供了强大的白名单管理功能、多层安全认证和服务器监控能力，适用于生产环境的Minecraft服务器管理。*
+*本文档描述了ConvenientAccess白名单管理系统的简化API接口。系统专注于核心的白名单管理功能和服务器监控能力，适合管理员直接操作的场景。*
 | 401 | 未授权访问 |
 | 403 | 访问被拒绝 |
 | 404 | API端点不存在 |
@@ -516,7 +503,7 @@ API 支持跨域请求，默认允许所有来源。可以在配置文件中自�
 
 ```javascript
 // 获取服务器状态
-fetch('http://your-server:8080/api/v1/server/status')
+fetch('http://your-server:22222/api/v1/server/status')
   .then(response => response.json())
   .then(data => {
     if (data.success) {
@@ -525,7 +512,7 @@ fetch('http://your-server:8080/api/v1/server/status')
   });
 
 // 获取性能数据
-fetch('http://your-server:8080/api/v1/server/performance')
+fetch('http://your-server:22222/api/v1/server/performance')
   .then(response => response.json())
   .then(data => {
     if (data.success) {
@@ -541,7 +528,7 @@ fetch('http://your-server:8080/api/v1/server/performance')
 import requests
 
 # 获取玩家列表
-response = requests.get('http://your-server:8080/api/v1/players/list')
+response = requests.get('http://your-server:22222/api/v1/players/list')
 if response.status_code == 200:
     data = response.json()
     if data['success']:
@@ -553,15 +540,15 @@ if response.status_code == 200:
 
 ```bash
 # 获取服务器状态
-curl -X GET "http://your-server:8080/api/v1/server/status" \
+curl -X GET "http://your-server:22222/api/v1/server/status" \
      -H "Accept: application/json"
 
 # 获取世界信息
-curl -X GET "http://your-server:8080/api/v1/worlds/list" \
+curl -X GET "http://your-server:22222/api/v1/worlds/list" \
      -H "Accept: application/json"
 
 # 带认证的请求
-curl -X GET "http://your-server:8080/api/v1/server/performance" \
+curl -X GET "http://your-server:22222/api/v1/server/performance" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -H "Accept: application/json"
 ```
