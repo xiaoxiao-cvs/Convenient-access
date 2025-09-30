@@ -2,6 +2,7 @@ package com.xaoxiao.convenientaccess.http;
 
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 import com.xaoxiao.convenientaccess.api.ApiManager;
+import com.xaoxiao.convenientaccess.api.ApiRouter;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.AbstractHandler;
@@ -22,11 +23,15 @@ public class HttpServer {
     
     private final ConvenientAccessPlugin plugin;
     private final ApiManager apiManager;
+    private final ApiRouter apiRouter;
     private Server server;
     
     public HttpServer(ConvenientAccessPlugin plugin, ApiManager apiManager) {
         this.plugin = plugin;
         this.apiManager = apiManager;
+        // 从白名单系统获取ApiRouter
+        this.apiRouter = plugin.getWhitelistSystem() != null ? 
+            plugin.getWhitelistSystem().getApiRouter() : null;
     }
     
     /**
@@ -109,35 +114,14 @@ public class HttpServer {
                 String clientIp = getClientIp(request);
                 Map<String, String> headers = getHeaders(request);
                 
-                // 处理API请求
-                apiManager.handleRequest(path, method, clientIp, headers)
-                    .thenAccept(apiResponse -> {
-                        try {
-                            // 设置响应
-                            response.setStatus(apiResponse.getStatusCode());
-                            response.setContentType(apiResponse.getContentType());
-                            response.setCharacterEncoding("UTF-8");
-                            response.getWriter().write(apiResponse.getBody());
-                            response.getWriter().flush();
-                            
-                        } catch (IOException e) {
-                            plugin.getLogger().log(Level.WARNING, "写入HTTP响应时发生错误", e);
-                        }
-                    })
-                    .exceptionally(throwable -> {
-                        plugin.getLogger().log(Level.SEVERE, "处理API请求时发生异常", throwable);
-                        try {
-                            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-                            response.setContentType("application/json");
-                            response.setCharacterEncoding("UTF-8");
-                            response.getWriter().write("{\"success\":false,\"error\":\"Internal Server Error\"}");
-                            response.getWriter().flush();
-                        } catch (IOException e) {
-                            plugin.getLogger().log(Level.SEVERE, "写入错误响应时发生异常", e);
-                        }
-                        return null;
-                    })
-                    .join(); // 等待异步操作完成
+                // 判断是否为白名单或管理员API
+                if (isWhitelistOrAdminApi(path) && apiRouter != null) {
+                    // 使用ApiRouter处理白名单和管理员API
+                    handleWithApiRouter(request, response);
+                } else {
+                    // 使用ApiManager处理其他API
+                    handleWithApiManager(path, method, clientIp, headers, response);
+                }
                     
             } catch (Exception e) {
                 plugin.getLogger().log(Level.SEVERE, "处理HTTP请求时发生错误", e);
@@ -152,6 +136,66 @@ public class HttpServer {
                     plugin.getLogger().log(Level.SEVERE, "写入错误响应时发生异常", ioException);
                 }
             }
+        }
+        
+        /**
+         * 判断是否为白名单或管理员API
+         */
+        private boolean isWhitelistOrAdminApi(String path) {
+            return path.startsWith("/api/v1/whitelist") || path.startsWith("/api/v1/admin");
+        }
+        
+        /**
+         * 使用ApiRouter处理请求
+         */
+        private void handleWithApiRouter(HttpServletRequest request, HttpServletResponse response) 
+                throws IOException {
+            try {
+                apiRouter.handleRequest(request, response);
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "ApiRouter处理请求时发生错误", e);
+                response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                response.setContentType("application/json");
+                response.setCharacterEncoding("UTF-8");
+                response.getWriter().write("{\"success\":false,\"error\":\"Internal Server Error\"}");
+                response.getWriter().flush();
+            }
+        }
+        
+        /**
+         * 使用ApiManager处理请求
+         */
+        private void handleWithApiManager(String path, String method, String clientIp, 
+                Map<String, String> headers, HttpServletResponse response) throws IOException {
+            
+            apiManager.handleRequest(path, method, clientIp, headers)
+                .thenAccept(apiResponse -> {
+                    try {
+                        // 设置响应
+                        response.setStatus(apiResponse.getStatusCode());
+                        response.setContentType(apiResponse.getContentType());
+                        response.setCharacterEncoding("UTF-8");
+                        response.getWriter().write(apiResponse.getBody());
+                        response.getWriter().flush();
+                        
+                    } catch (IOException e) {
+                        plugin.getLogger().log(Level.WARNING, "写入HTTP响应时发生错误", e);
+                    }
+                })
+                .exceptionally(throwable -> {
+                    plugin.getLogger().log(Level.SEVERE, "处理API请求时发生异常", throwable);
+                    try {
+                        response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                        response.setContentType("application/json");
+                        response.setCharacterEncoding("UTF-8");
+                        response.getWriter().write("{\"success\":false,\"error\":\"Internal Server Error\"}");
+                        response.getWriter().flush();
+                    } catch (IOException e) {
+                        plugin.getLogger().log(Level.SEVERE, "写入错误响应时发生异常", e);
+                    }
+                    return null;
+                })
+                .join(); // 等待异步操作完成
         }
         
         /**

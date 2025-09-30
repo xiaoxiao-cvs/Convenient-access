@@ -70,11 +70,6 @@ public class ApiManager {
      * 路由请求到对应的处理方法
      */
     private CompletableFuture<ApiResponse> routeRequest(String path, String method) {
-        if (!"GET".equals(method)) {
-            return CompletableFuture.completedFuture(
-                createErrorResponse(405, "Method Not Allowed", "不支持的请求方法"));
-        }
-        
         String apiVersion = plugin.getConfigManager().getApiVersion();
         String basePath = "/api/" + apiVersion;
         
@@ -85,27 +80,57 @@ public class ApiManager {
         
         String endpoint = path.substring(basePath.length());
         
-        switch (endpoint) {
-            case "/server/info":
-                return handleServerInfo();
-            case "/server/status":
-                return handleServerStatus();
-            case "/server/performance":
-                return handlePerformance();
-            case "/players/online":
-                return handlePlayersOnline();
-            case "/players/list":
-                return handlePlayersList();
-            case "/worlds/list":
-                return handleWorldsList();
-            case "/system/resources":
-                return handleSystemResources();
-            case "/health":
-                return handleHealthCheck();
-            default:
-                return CompletableFuture.completedFuture(
-                    createErrorResponse(404, "Not Found", "API端点不存在: " + endpoint));
+        // 支持GET请求的端点
+        if ("GET".equals(method)) {
+            switch (endpoint) {
+                case "/server/info":
+                    return handleServerInfo();
+                case "/server/status":
+                    return handleServerStatus();
+                case "/server/performance":
+                    return handlePerformance();
+                case "/players/online":
+                    return handlePlayersOnline();
+                case "/players/list":
+                    return handlePlayersList();
+                case "/worlds/list":
+                    return handleWorldsList();
+                case "/system/resources":
+                    return handleSystemResources();
+                case "/health":
+                    return handleHealthCheck();
+                default:
+                    return CompletableFuture.completedFuture(
+                        createErrorResponse(404, "Not Found", "API端点不存在: " + endpoint));
+            }
         }
+        
+        // 支持POST请求的端点
+        if ("POST".equals(method)) {
+            switch (endpoint) {
+                case "/server/reload":
+                    return handleServerReload();
+                case "/cache/clear":
+                    return handleCacheClear();
+                default:
+                    return CompletableFuture.completedFuture(
+                        createErrorResponse(404, "Not Found", "API端点不存在: " + endpoint));
+            }
+        }
+        
+        // 支持DELETE请求的端点
+        if ("DELETE".equals(method)) {
+            switch (endpoint) {
+                case "/cache/clear":
+                    return handleCacheClear();
+                default:
+                    return CompletableFuture.completedFuture(
+                        createErrorResponse(404, "Not Found", "API端点不存在: " + endpoint));
+            }
+        }
+        
+        return CompletableFuture.completedFuture(
+            createErrorResponse(405, "Method Not Allowed", "不支持的请求方法: " + method));
     }
     
     // API端点处理方法
@@ -174,6 +199,44 @@ public class ApiManager {
             health.put("components", components);
             
             return createSuccessResponse(health);
+        });
+    }
+    
+    /**
+     * 处理服务器重载请求
+     */
+    private CompletableFuture<ApiResponse> handleServerReload() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                plugin.reload();
+                Map<String, Object> result = new HashMap<>();
+                result.put("message", "服务器重载成功");
+                result.put("timestamp", System.currentTimeMillis());
+                return createSuccessResponse(result);
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "服务器重载失败", e);
+                return createErrorResponse(500, "Internal Server Error", "服务器重载失败: " + e.getMessage());
+            }
+        });
+    }
+    
+    /**
+     * 处理缓存清理请求
+     */
+    private CompletableFuture<ApiResponse> handleCacheClear() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                if (plugin.getCacheManager() != null) {
+                    plugin.getCacheManager().clearAll();
+                }
+                Map<String, Object> result = new HashMap<>();
+                result.put("message", "缓存清理成功");
+                result.put("timestamp", System.currentTimeMillis());
+                return createSuccessResponse(result);
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "缓存清理失败", e);
+                return createErrorResponse(500, "Internal Server Error", "缓存清理失败: " + e.getMessage());
+            }
         });
     }
     

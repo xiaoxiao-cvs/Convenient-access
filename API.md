@@ -36,8 +36,13 @@ ConvenientAccess 提供了一套完整的 RESTful API，用于管理 Minecraft 1
 ### 服务器监控 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
+| `/api/v1/server/info` | GET | 获取服务器详细信息 | 无 |
 | `/api/v1/server/status` | GET | 获取服务器状态信息 | 无 |
 | `/api/v1/server/performance` | GET | 获取服务器性能数据 | 无 |
+| `/api/v1/players/online` | GET | 获取在线玩家数量 | 无 |
+| `/api/v1/players/list` | GET | 获取详细玩家列表 | 无 |
+| `/api/v1/worlds/list` | GET | 获取世界列表 | 无 |
+| `/api/v1/system/resources` | GET | 获取系统资源信息 | 无 |
 | `/api/v1/health` | GET | 健康检查端点 | 无 |
 
 ## 认证机制

@@ -151,6 +151,43 @@ public class ApiRouter extends HttpServlet {
     }
     
     /**
+     * 公共方法：处理请求
+     */
+    public void handleRequest(HttpServletRequest request, HttpServletResponse response) 
+            throws ServletException, IOException {
+        
+        String method = request.getMethod();
+        switch (method) {
+            case "GET":
+                doGet(request, response);
+                break;
+            case "POST":
+                doPost(request, response);
+                break;
+            case "DELETE":
+                doDelete(request, response);
+                break;
+            case "OPTIONS":
+                doOptions(request, response);
+                break;
+            default:
+                send405Response(response, "不支持的请求方法: " + method);
+        }
+    }
+    
+    /**
+     * 发送405响应
+     */
+    private void send405Response(HttpServletResponse response, String message) throws IOException {
+        response.setStatus(405);
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        
+        ApiResponse<Object> apiResponse = ApiResponse.error(message);
+        response.getWriter().write(apiResponse.toString());
+    }
+    
+    /**
      * 发送404响应
      */
     private void send404Response(HttpServletResponse response, String message) throws IOException {
