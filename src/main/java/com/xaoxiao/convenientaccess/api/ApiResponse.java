@@ -138,4 +138,15 @@ public class ApiResponse<T> {
     public void setTimestamp(String timestamp) {
         this.timestamp = timestamp;
     }
+    
+    /**
+     * 重写toString方法，返回JSON格式的字符串
+     */
+    @Override
+    public String toString() {
+        com.google.gson.Gson gson = new com.google.gson.GsonBuilder()
+            .setPrettyPrinting()
+            .create();
+        return gson.toJson(this);
+    }
 }

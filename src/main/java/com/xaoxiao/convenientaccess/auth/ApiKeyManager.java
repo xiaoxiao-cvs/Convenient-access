@@ -51,16 +51,17 @@ public class ApiKeyManager {
                     is_active BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_used_at TIMESTAMP,
-                    usage_count INTEGER DEFAULT 0,
-                    
-                    INDEX idx_key_hash (key_hash),
-                    INDEX idx_is_active (is_active),
-                    INDEX idx_expires_at (expires_at)
+                    usage_count INTEGER DEFAULT 0
                 )
             """;
             
             try (Statement stmt = connection.createStatement()) {
                 stmt.execute(createTableSql);
+                
+                // 创建索引（SQLite需要单独创建）
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_is_active ON api_keys(is_active)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)");
             }
             
             // 加载活跃的API Keys到缓存

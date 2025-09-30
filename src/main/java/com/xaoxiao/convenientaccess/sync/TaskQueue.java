@@ -58,7 +58,8 @@ public class TaskQueue {
             SyncTask existingTask = taskMap.get(taskKey);
             if (existingTask.getStatus() == SyncTask.TaskStatus.PENDING) {
                 logger.debug("跳过重复任务: {}", taskKey);
-                return false;
+                // 对于重复的PENDING任务，返回true表示任务已存在（不是失败）
+                return true;
             }
         }
         

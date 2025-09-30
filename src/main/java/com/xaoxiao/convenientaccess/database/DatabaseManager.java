@@ -133,6 +133,8 @@ public class DatabaseManager {
      * 创建所有数据库表
      */
     private void createTables(Connection connection) throws SQLException {
+        logger.info("开始创建数据库表...");
+        
         // 读取SQL脚本并执行
         String[] sqlScripts = {
             "schema/whitelist.sql",
@@ -147,9 +149,18 @@ public class DatabaseManager {
             "schema/indexes.sql"
         };
         
+        int successCount = 0;
         for (String scriptPath : sqlScripts) {
-            executeScript(connection, scriptPath);
+            try {
+                executeScript(connection, scriptPath);
+                successCount++;
+            } catch (SQLException e) {
+                logger.error("执行SQL脚本失败: {}", scriptPath, e);
+                // 继续执行其他脚本，不中断整个过程
+            }
         }
+        
+        logger.info("数据库表创建完成，成功执行 {}/{} 个脚本", successCount, sqlScripts.length);
         
         // 插入初始数据
         insertInitialData(connection);
@@ -166,39 +177,107 @@ public class DatabaseManager {
             }
             
             String sql = new String(inputStream.readAllBytes());
-            String[] statements = sql.split(";");
+            
+            // 移除注释并处理多行语句
+            StringBuilder cleanSql = new StringBuilder();
+            String[] lines = sql.split("\n");
+            
+            for (String line : lines) {
+                String trimmedLine = line.trim();
+                // 跳过空行和注释行
+                if (!trimmedLine.isEmpty() && !trimmedLine.startsWith("--")) {
+                    cleanSql.append(line).append("\n");
+                }
+            }
+            
+            // 按分号分割语句，但要处理字符串中的分号
+            String[] statements = splitSqlStatements(cleanSql.toString());
             
             try (Statement stmt = connection.createStatement()) {
                 for (String statement : statements) {
                     String trimmed = statement.trim();
-                    if (!trimmed.isEmpty() && !trimmed.startsWith("--")) {
+                    if (!trimmed.isEmpty()) {
+                        logger.debug("执行SQL: {}", trimmed);
                         stmt.execute(trimmed);
                     }
                 }
             }
             
-            logger.debug("执行SQL脚本: {}", scriptPath);
+            logger.info("成功执行SQL脚本: {}", scriptPath);
         } catch (IOException e) {
             logger.error("读取SQL脚本失败: {}", scriptPath, e);
             throw new SQLException("读取SQL脚本失败", e);
+        } catch (SQLException e) {
+            logger.error("执行SQL脚本失败: {}", scriptPath, e);
+            throw e;
         }
+    }
+    
+    /**
+     * 智能分割SQL语句（处理字符串中的分号）
+     */
+    private String[] splitSqlStatements(String sql) {
+        java.util.List<String> statements = new java.util.ArrayList<>();
+        StringBuilder currentStatement = new StringBuilder();
+        boolean inString = false;
+        char stringChar = 0;
+        
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            
+            if (!inString && (c == '\'' || c == '"')) {
+                inString = true;
+                stringChar = c;
+            } else if (inString && c == stringChar) {
+                // 检查是否是转义字符
+                if (i + 1 < sql.length() && sql.charAt(i + 1) == stringChar) {
+                    currentStatement.append(c);
+                    i++; // 跳过下一个字符
+                } else {
+                    inString = false;
+                }
+            } else if (!inString && c == ';') {
+                String statement = currentStatement.toString().trim();
+                if (!statement.isEmpty()) {
+                    statements.add(statement);
+                }
+                currentStatement = new StringBuilder();
+                continue;
+            }
+            
+            currentStatement.append(c);
+        }
+        
+        // 添加最后一个语句
+        String lastStatement = currentStatement.toString().trim();
+        if (!lastStatement.isEmpty()) {
+            statements.add(lastStatement);
+        }
+        
+        return statements.toArray(new String[0]);
     }
     
     /**
      * 插入初始数据
      */
     private void insertInitialData(Connection connection) throws SQLException {
-        // 插入默认角色
-        String insertRoles = """
-            INSERT OR IGNORE INTO admin_roles (role_name, display_name, permissions) VALUES
-            ('super_admin', '超级管理员', '["*"]'),
-            ('admin', '管理员', '["whitelist:*", "stats:read"]'),
-            ('operator', '操作员', '["whitelist:read", "whitelist:write"]'),
-            ('viewer', '查看者', '["whitelist:read", "stats:read"]')
-        """;
-        
-        try (Statement stmt = connection.createStatement()) {
-            stmt.execute(insertRoles);
+        try {
+            // 插入默认角色
+            String insertRoles = """
+                INSERT OR IGNORE INTO admin_roles (role_name, display_name, permissions) VALUES
+                ('super_admin', '超级管理员', '["*"]'),
+                ('admin', '管理员', '["whitelist:*", "stats:read"]'),
+                ('operator', '操作员', '["whitelist:read", "whitelist:write"]'),
+                ('viewer', '查看者', '["whitelist:read", "stats:read"]')
+            """;
+            
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute(insertRoles);
+                logger.info("成功插入默认角色数据");
+            }
+        } catch (SQLException e) {
+            logger.warn("插入初始数据时出现错误（可能表不存在）: {}", e.getMessage());
+            // 不抛出异常，允许继续初始化
         }
         
         logger.debug("插入初始数据完成");

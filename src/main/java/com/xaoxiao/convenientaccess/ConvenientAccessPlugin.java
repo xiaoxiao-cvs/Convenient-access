@@ -45,6 +45,19 @@ public class ConvenientAccessPlugin extends JavaPlugin {
             whitelistSystem.initialize().thenAccept(success -> {
                 if (success) {
                     logger.info("白名单管理系统启动成功");
+                    
+                    // 在白名单系统初始化完成后启动HTTP服务器
+                    if (configManager.isHttpEnabled()) {
+                        try {
+                            httpServer = new HttpServer(this, apiManager);
+                            httpServer.start();
+                            logger.info("HTTP服务器启动完成 - 端口: {}", configManager.getHttpPort());
+                        } catch (Exception e) {
+                            logger.error("HTTP服务器启动失败", e);
+                        }
+                    } else {
+                        logger.info("HTTP服务器已禁用");
+                    }
                 } else {
                     logger.error("白名单管理系统启动失败");
                 }
@@ -52,15 +65,6 @@ public class ConvenientAccessPlugin extends JavaPlugin {
                 logger.error("白名单管理系统启动异常", throwable);
                 return null;
             });
-            
-            // 初始化HTTP服务器
-            if (configManager.isHttpEnabled()) {
-                httpServer = new HttpServer(this, apiManager);
-                httpServer.start();
-                logger.info("HTTP服务器启动完成 - 端口: {}", configManager.getHttpPort());
-            } else {
-                logger.info("HTTP服务器已禁用");
-            }
             
             // 注册命令
             getCommand("convenientaccess").setExecutor(new ConvenientAccessCommand(this));

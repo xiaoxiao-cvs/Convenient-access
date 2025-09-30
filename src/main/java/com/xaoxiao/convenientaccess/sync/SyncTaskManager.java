@@ -111,7 +111,14 @@ public class SyncTaskManager {
         
         if (added) {
             logger.debug("任务已添加到队列: {} (类型: {}, 优先级: {})", task.getId(), taskType, priority);
-            return CompletableFuture.completedFuture(task.getId());
+            // 确保返回有效的任务ID
+            Long taskId = task.getId();
+            if (taskId == null || taskId <= 0) {
+                logger.warn("队列任务ID无效: {}, 使用时间戳作为ID", taskId);
+                taskId = System.currentTimeMillis();
+                task.setId(taskId);
+            }
+            return CompletableFuture.completedFuture(taskId);
         }
         
         // 队列添加失败，回退到数据库方式

@@ -1,9 +1,13 @@
 package com.xaoxiao.convenientaccess.api;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.TypeAdapter;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonWriter;
 import com.xaoxiao.convenientaccess.sync.SyncTask;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
 import com.xaoxiao.convenientaccess.whitelist.BatchOperation;
@@ -16,6 +20,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -35,7 +41,31 @@ public class WhitelistApiController {
     public WhitelistApiController(WhitelistManager whitelistManager, SyncTaskManager syncTaskManager) {
         this.whitelistManager = whitelistManager;
         this.syncTaskManager = syncTaskManager;
-        this.gson = new Gson();
+        // 配置Gson以正确处理LocalDateTime
+        this.gson = new GsonBuilder()
+            .registerTypeAdapter(LocalDateTime.class, new TypeAdapter<LocalDateTime>() {
+                private final DateTimeFormatter formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+                
+                @Override
+                public void write(JsonWriter out, LocalDateTime value) throws IOException {
+                    if (value == null) {
+                        out.nullValue();
+                    } else {
+                        out.value(value.format(formatter));
+                    }
+                }
+                
+                @Override
+                public LocalDateTime read(JsonReader in) throws IOException {
+                    if (in.peek() == com.google.gson.stream.JsonToken.NULL) {
+                        in.nextNull();
+                        return null;
+                    }
+                    return LocalDateTime.parse(in.nextString(), formatter);
+                }
+            })
+            .setPrettyPrinting()
+            .create();
     }
     
     /**
@@ -57,20 +87,15 @@ public class WhitelistApiController {
             // 使用新的分页查询方法
             whitelistManager.getWhitelistPaginated(page, size, search, source, addedBy, sort, order, startDate, endDate)
                 .thenAccept(result -> {
-                    // 转换为API响应格式
-                    PaginationResult<WhitelistEntry> apiResult = new PaginationResult<>(
-                        result.getItems(), 
-                        result.getPage(), 
-                        result.getSize(), 
-                        result.getTotal()
-                    );
-                    sendJsonResponse(response, 200, ApiResponse.success(apiResult));
+                    // 直接使用PaginatedResult，不需要转换
+                    sendJsonResponse(response, 200, ApiResponse.success(result));
                 })
                 .exceptionally(throwable -> {
                     logger.error("查询白名单失败", throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("查询白名单失败"));
                     return null;
-                });
+                })
+                .join(); // 等待异步操作完成
             
         } catch (Exception e) {
             logger.error("处理白名单查询请求失败", e);
@@ -140,7 +165,8 @@ public class WhitelistApiController {
                     logger.error("添加玩家失败: {} ({})", name, uuid, throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("添加玩家失败"));
                     return null;
-                });
+                })
+                .join(); // 等待异步操作完成
             
         } catch (Exception e) {
             logger.error("处理添加玩家请求失败", e);
@@ -191,7 +217,8 @@ public class WhitelistApiController {
                     logger.error("移除玩家失败: {}", uuid, throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("移除玩家失败"));
                     return false;
-                });
+                })
+                .join(); // 等待异步操作完成
             
         } catch (Exception e) {
             logger.error("处理移除玩家请求失败", e);
@@ -212,7 +239,8 @@ public class WhitelistApiController {
                     logger.error("获取白名单统计失败", throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("获取统计信息失败"));
                     return null;
-                });
+                })
+                .join(); // 等待异步操作完成
             
         } catch (Exception e) {
             logger.error("处理统计信息请求失败", e);
@@ -227,12 +255,13 @@ public class WhitelistApiController {
         try {
             syncTaskManager.scheduleFullSync()
                 .thenAccept(taskId -> {
-                    if (taskId > 0) {
+                    if (taskId != null && taskId > 0) {
                         JsonObject result = new JsonObject();
                         result.addProperty("task_id", taskId);
                         result.addProperty("message", "同步任务已创建");
                         sendJsonResponse(response, 200, ApiResponse.success(result));
                     } else {
+                        logger.warn("同步任务创建失败，返回的taskId: {}", taskId);
                         sendJsonResponse(response, 500, ApiResponse.error("创建同步任务失败"));
                     }
                 })
@@ -240,7 +269,8 @@ public class WhitelistApiController {
                     logger.error("触发同步失败", throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("触发同步失败"));
                     return null;
-                });
+                })
+                .join(); // 等待异步操作完成
             
         } catch (Exception e) {
             logger.error("处理同步请求失败", e);
@@ -261,7 +291,8 @@ public class WhitelistApiController {
                     logger.error("获取同步状态失败", throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("获取同步状态失败"));
                     return null;
-                });
+                })
+                .join(); // 等待异步操作完成
             
         } catch (Exception e) {
             logger.error("处理同步状态请求失败", e);
@@ -278,6 +309,7 @@ public class WhitelistApiController {
             response.setContentType("application/json");
             response.setCharacterEncoding("UTF-8");
             response.getWriter().write(gson.toJson(apiResponse));
+            response.getWriter().flush();
         } catch (IOException e) {
             logger.error("发送JSON响应失败", e);
         }
@@ -415,7 +447,8 @@ public class WhitelistApiController {
                         logger.error("批量添加失败", throwable);
                         sendJsonResponse(response, 500, ApiResponse.error("批量添加失败"));
                         return null;
-                    });
+                    })
+                    .join(); // 等待异步操作完成
                     
             } else if ("remove".equalsIgnoreCase(operation)) {
                 // 批量删除
@@ -470,7 +503,8 @@ public class WhitelistApiController {
                         logger.error("批量删除失败", throwable);
                         sendJsonResponse(response, 500, ApiResponse.error("批量删除失败"));
                         return null;
-                    });
+                    })
+                    .join(); // 等待异步操作完成
                     
             } else {
                 sendJsonResponse(response, 400, ApiResponse.badRequest("不支持的操作类型: " + operation));
