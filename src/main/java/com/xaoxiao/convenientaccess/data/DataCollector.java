@@ -226,6 +226,7 @@ public class DataCollector {
                     playerInfo.put("display_name", player.getDisplayName());
                     playerInfo.put("level", player.getLevel());
                     playerInfo.put("health", player.getHealth());
+                    playerInfo.put("max_health", player.getMaxHealth());
                     playerInfo.put("food_level", player.getFoodLevel());
                     playerInfo.put("game_mode", player.getGameMode().name());
                     playerInfo.put("world", player.getWorld().getName());

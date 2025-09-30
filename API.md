@@ -2,33 +2,63 @@
 
 ## 概述
 
-ConvenientAccess 提供了一套完整的 RESTful API，用于获取 Minecraft 1.20.1 Arclight 服务器的详细信息。所有 API 端点都返回 JSON 格式的数据。
+ConvenientAccess 提供了一套完整的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。所有 API 端点都返回 JSON 格式的数据，支持多层安全认证和服务器监控。
 
 ## 基础信息
 
 - **基础URL**: `http://your-server:8080/api/v1`
 - **内容类型**: `application/json`
 - **字符编码**: `UTF-8`
+- **认证方式**: API Key + JWT Token
+- **频率限制**: 60 requests/minute (一般请求), 10 requests/minute (登录请求)
 
-## 所有可用端点
+## 🚀 所有可用端点
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/api/v1/server/status` | GET | 获取服务器基本状态信息 |
-| `/api/v1/server/info` | GET | 获取详细的服务器信息 |
-| `/api/v1/server/performance` | GET | 获取详细的服务器性能数据 |
-| `/api/v1/players/online` | GET | 获取在线玩家的基本统计信息 |
-| `/api/v1/players/list` | GET | 获取详细的在线玩家列表 |
-| `/api/v1/worlds/list` | GET | 获取服务器所有世界的详细信息 |
-| `/api/v1/system/resources` | GET | 获取系统资源使用情况 |
-| `/api/v1/health` | GET | 简单的健康检查端点 |
+### 白名单管理 API
+| 端点 | 方法 | 描述 | 认证要求 |
+|------|------|------|----------|
+| `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | API Key |
+| `/api/v1/whitelist` | POST | 添加白名单条目 | API Key |
+| `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | API Key |
+| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | API Key |
+| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | API Key |
+| `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Key |
+| `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | API Key |
 
-## 认证
+### 管理员认证 API
+| 端点 | 方法 | 描述 | 认证要求 |
+|------|------|------|----------|
+| `/api/v1/admin/login` | POST | 管理员登录 | 无 |
+| `/api/v1/admin/logout` | POST | 管理员登出 | JWT Token |
+| `/api/v1/admin/session` | GET | 验证会话有效性 | JWT Token |
+| `/api/v1/admin/profile` | GET | 获取管理员信息 | JWT Token |
 
-如果启用了 API 认证，需要在请求头中包含 API 密钥：
+### 服务器监控 API
+| 端点 | 方法 | 描述 | 认证要求 |
+|------|------|------|----------|
+| `/api/v1/server/status` | GET | 获取服务器状态信息 | 无 |
+| `/api/v1/server/performance` | GET | 获取服务器性能数据 | 无 |
+| `/api/v1/health` | GET | 健康检查端点 | 无 |
 
+## 认证机制
+
+### 1. API Key 认证
+用于基础API访问，在请求头中包含：
 ```http
-Authorization: Bearer YOUR_API_KEY
+X-API-Key: your-api-key-here
+```
+
+### 2. JWT Token 认证
+用于管理员功能，在请求头中包含：
+```http
+Authorization: Bearer your-jwt-token-here
+```
+
+### 3. 双重认证
+某些敏感操作需要同时提供API Key和JWT Token：
+```http
+X-API-Key: your-api-key-here
+Authorization: Bearer your-jwt-token-here
 ```
 
 ## 响应格式
@@ -59,13 +89,185 @@ Authorization: Bearer YOUR_API_KEY
 }
 ```
 
-## API 端点详细说明
+## 📋 API 端点详细说明
 
-### 1. 服务器状态
+### 白名单管理 API
+
+#### `GET /api/v1/whitelist`
+
+获取白名单列表，支持分页、搜索和排序。
+
+**请求参数：**
+- `page` (可选): 页码，默认为1
+- `size` (可选): 每页大小，默认为20
+- `search` (可选): 搜索关键词
+- `sort` (可选): 排序字段 (name, uuid, created_at)
+- `order` (可选): 排序方向 (asc, desc)
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "entries": [
+      {
+        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+        "name": "Player1",
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+        "source": "manual",
+        "notes": "VIP玩家"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "size": 20,
+      "total": 100,
+      "total_pages": 5
+    }
+  },
+  "timestamp": 1640995200000
+}
+```
+
+#### `POST /api/v1/whitelist`
+
+添加新的白名单条目。
+
+**请求体：**
+```json
+{
+  "uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "Player1",
+  "notes": "VIP玩家"
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Player1",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z",
+    "source": "api",
+    "notes": "VIP玩家"
+  },
+  "timestamp": 1640995200000
+}
+```
+
+#### `DELETE /api/v1/whitelist/{uuid}`
+
+删除指定UUID的白名单条目。
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "白名单条目已删除",
+    "uuid": "550e8400-e29b-41d4-a716-446655440000"
+  },
+  "timestamp": 1640995200000
+}
+```
+
+#### `POST /api/v1/whitelist/batch`
+
+批量添加白名单条目。
+
+**请求体：**
+```json
+{
+  "entries": [
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "Player1",
+      "notes": "批量添加"
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440001",
+      "name": "Player2",
+      "notes": "批量添加"
+    }
+  ]
+}
+```
+
+#### `GET /api/v1/whitelist/stats`
+
+获取白名单统计信息。
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "total_entries": 150,
+    "recent_additions": 5,
+    "recent_deletions": 2,
+    "sync_status": "active",
+    "last_sync": "2024-01-01T00:00:00Z"
+  },
+  "timestamp": 1640995200000
+}
+```
+
+### 管理员认证 API
+
+#### `POST /api/v1/admin/login`
+
+管理员登录。
+
+**请求体：**
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "expires_at": "2024-01-01T01:00:00Z",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "role": "ADMIN",
+      "permissions": ["whitelist:read", "whitelist:write", "system:admin"]
+    }
+  },
+  "timestamp": 1640995200000
+}
+```
+
+#### `POST /api/v1/admin/logout`
+
+管理员登出。
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "登出成功"
+  },
+  "timestamp": 1640995200000
+}
+```
+
+### 服务器监控 API
 
 #### `GET /api/v1/server/status`
 
-获取服务器基本状态信息。
+获取服务器状态信息。
 
 **响应示例：**
 ```json
@@ -73,47 +275,17 @@ Authorization: Bearer YOUR_API_KEY
   "success": true,
   "data": {
     "online": true,
-    "timestamp": 1640995200000,
     "spark_available": true,
-    "plugin_version": "0.1.0"
-  }
-}
-```
-
-### 2. 服务器信息
-
-#### `GET /api/v1/server/info`
-
-获取详细的服务器信息。
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "name": "Minecraft Server",
-    "version": "1.20.1-R0.1-SNAPSHOT",
-    "bukkit_version": "1.20.1-R0.1-SNAPSHOT",
-    "motd": "A Minecraft Server",
-    "max_players": 20,
-    "port": 25565,
-    "allow_nether": true,
-    "allow_end": true,
-    "hardcore": false,
-    "online_mode": true,
-    "whitelist": false,
-    "uptime_ms": 3600000,
-    "uptime_formatted": "1h 0m 0s",
+    "plugin_version": "0.1.0",
     "timestamp": 1640995200000
-  }
+  },
+  "timestamp": 1640995200000
 }
 ```
-
-### 3. 性能数据
 
 #### `GET /api/v1/server/performance`
 
-获取详细的服务器性能数据，包括 TPS、MSPT、CPU、内存、GC 和线程信息。
+获取服务器性能数据。
 
 **响应示例：**
 ```json
@@ -121,277 +293,33 @@ Authorization: Bearer YOUR_API_KEY
   "success": true,
   "data": {
     "tps": {
-      "available": true,
-      "source": "spark",
       "values": {
-        "last_10s": 19.8,
-        "last_1m": 19.5,
-        "last_5m": 19.2
-      },
-      "server_load_percent": 2.5
+        "last_1m": 20.0,
+        "last_5m": 19.8,
+        "last_15m": 19.5
+      }
     },
     "mspt": {
-      "available": true,
-      "source": "spark",
       "values": {
-        "last_1m": {
-          "mean": 45.2,
-          "max": 120.5,
-          "min": 25.1,
-          "percentile_95": 85.3
-        },
-        "last_5m": {
-          "mean": 48.1,
-          "max": 150.2,
-          "min": 22.8,
-          "percentile_95": 92.7
-        }
+        "last_1m": 15.2,
+        "last_5m": 16.1,
+        "last_15m": 17.3
       }
+    },
+    "memory": {
+      "used": 2048,
+      "max": 4096,
+      "free": 2048
     },
     "cpu": {
-      "available": true,
-      "source": "spark",
-      "system": {
-        "last_10s": 25.4,
-        "last_1m": 23.8,
-        "last_15m": 22.1
-      },
-      "process": {
-        "last_10s": 15.2,
-        "last_1m": 14.6,
-        "last_15m": 13.9
-      }
-    },
-    "memory": {
-      "heap": {
-        "init": 268435456,
-        "used": 1073741824,
-        "committed": 2147483648,
-        "max": 4294967296,
-        "usage_percent": 25.0
-      },
-      "non_heap": {
-        "init": 2555904,
-        "used": 52428800,
-        "committed": 67108864,
-        "max": -1
-      },
-      "pools": {
-        "eden_space": {
-          "used": 536870912,
-          "committed": 1073741824,
-          "max": 1073741824,
-          "type": "HEAP"
-        }
-      },
-      "source": "jvm"
-    },
-    "gc": {
-      "collectors": {
-        "g1_young_generation": {
-          "collection_count": 150,
-          "collection_time": 2500,
-          "memory_pool_names": ["G1 Eden Space", "G1 Survivor Space"]
-        },
-        "g1_old_generation": {
-          "collection_count": 5,
-          "collection_time": 800,
-          "memory_pool_names": ["G1 Old Gen"]
-        }
-      },
-      "total_collections": 155,
-      "total_time_ms": 3300,
-      "average_time_per_collection": 21.29,
-      "source": "jvm"
-    },
-    "threads": {
-      "current_thread_count": 45,
-      "daemon_thread_count": 38,
-      "peak_thread_count": 52,
-      "total_started_thread_count": 125,
-      "deadlocked_threads": 0,
-      "source": "jvm"
+      "process": 25.5,
+      "system": 45.2
     },
     "timestamp": 1640995200000
-  }
+  },
+  "timestamp": 1640995200000
 }
 ```
-
-### 4. 玩家信息
-
-#### `GET /api/v1/players/online`
-
-获取在线玩家的基本统计信息。
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "online_count": 5,
-    "max_players": 20,
-    "timestamp": 1640995200000
-  }
-}
-```
-
-#### `GET /api/v1/players/list`
-
-获取详细的在线玩家列表。
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "online_count": 2,
-    "max_players": 20,
-    "players": [
-      {
-        "name": "Player1",
-        "uuid": "550e8400-e29b-41d4-a716-446655440000",
-        "display_name": "Player1",
-        "level": 30,
-        "health": 20.0,
-        "food_level": 20,
-        "game_mode": "SURVIVAL",
-        "world": "world",
-        "location": {
-          "x": 100.5,
-          "y": 64.0,
-          "z": -200.3,
-          "yaw": 45.0,
-          "pitch": 0.0
-        },
-        "ping": 25,
-        "ip": "192.168.1.100"
-      }
-    ],
-    "timestamp": 1640995200000
-  }
-}
-```
-
-### 5. 世界信息
-
-#### `GET /api/v1/worlds/list`
-
-获取服务器所有世界的详细信息。
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "world_count": 3,
-    "worlds": [
-      {
-        "name": "world",
-        "environment": "NORMAL",
-        "dimension_type": "overworld",
-        "dimension_name": "主世界",
-        "dimension_id": 0,
-        "difficulty": "NORMAL",
-        "spawn_location": {
-          "x": 0.0,
-          "y": 64.0,
-          "z": 0.0
-        },
-        "time": 6000,
-        "full_time": 24000,
-        "weather_duration": 12000,
-        "thunder_duration": 0,
-        "has_storm": false,
-        "thundering": false,
-        "entity_count": 150,
-        "living_entity_count": 120,
-        "player_count": 2,
-        "loaded_chunks": 256
-      },
-      {
-        "name": "world_nether",
-        "environment": "NETHER",
-        "dimension_type": "the_nether",
-        "dimension_name": "下界",
-        "dimension_id": -1,
-        "difficulty": "NORMAL",
-        "spawn_location": {
-          "x": 0.0,
-          "y": 64.0,
-          "z": 0.0
-        },
-        "time": 18000,
-        "full_time": 18000,
-        "weather_duration": 0,
-        "thunder_duration": 0,
-        "has_storm": false,
-        "thundering": false,
-        "entity_count": 50,
-        "living_entity_count": 45,
-        "player_count": 0,
-        "loaded_chunks": 64
-      },
-      {
-        "name": "world_the_end",
-        "environment": "THE_END",
-        "dimension_type": "the_end",
-        "dimension_name": "末地",
-        "dimension_id": 1,
-        "difficulty": "NORMAL",
-        "spawn_location": {
-          "x": 100.0,
-          "y": 49.0,
-          "z": 0.0
-        },
-        "time": 6000,
-        "full_time": 6000,
-        "weather_duration": 0,
-        "thunder_duration": 0,
-        "has_storm": false,
-        "thundering": false,
-        "entity_count": 25,
-        "living_entity_count": 20,
-        "player_count": 0,
-        "loaded_chunks": 32
-      }
-    ],
-    "timestamp": 1640995200000
-  }
-}
-```
-
-### 6. 系统资源
-
-#### `GET /api/v1/system/resources`
-
-获取系统资源使用情况。
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "memory": {
-      "max": 4294967296,
-      "total": 2147483648,
-      "free": 1073741824,
-      "used": 1073741824,
-      "usage_percent": 25.0
-    },
-    "system": {
-      "os_name": "Linux",
-      "os_version": "5.4.0-74-generic",
-      "os_arch": "amd64",
-      "java_version": "17.0.1",
-      "java_vendor": "Eclipse Adoptium",
-      "available_processors": 8
-    },
-    "timestamp": 1640995200000
-  }
-}
-```
-
-### 7. 健康检查
 
 #### `GET /api/v1/health`
 
@@ -403,56 +331,146 @@ Authorization: Bearer YOUR_API_KEY
   "success": true,
   "data": {
     "status": "healthy",
+    "uptime": 1640995200000,
+    "version": "0.1.0",
+    "components": {
+      "cache": "healthy",
+      "data_collector": "healthy"
+    },
     "timestamp": 1640995200000
   }
 }
 ```
+## 错误代码说明
 
-## 数据字段说明
+| 错误代码 | 说明 | 解决方案 |
+|----------|------|----------|
+| 400 | 请求参数错误 | 检查请求参数格式和必填字段 |
+| 401 | 认证失败 | 检查API Key或JWT Token是否正确 |
+| 403 | 权限不足 | 确认用户具有相应操作权限 |
+| 404 | 资源不存在 | 检查请求的UUID或路径是否正确 |
+| 409 | 资源冲突 | 白名单条目已存在或操作冲突 |
+| 429 | 请求频率超限 | 降低请求频率，等待限制解除 |
+| 500 | 服务器内部错误 | 联系管理员检查服务器状态 |
 
-### 维度信息
+## 安全最佳实践
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `environment` | String | Bukkit 环境类型 (NORMAL, NETHER, THE_END) |
-| `dimension_type` | String | 标准维度类型 (overworld, the_nether, the_end) |
-| `dimension_name` | String | 中文维度名称 (主世界, 下界, 末地) |
-| `dimension_id` | Integer | 维度ID (0: 主世界, -1: 下界, 1: 末地) |
+### 1. API Key 管理
+- 定期轮换API Key
+- 不要在客户端代码中硬编码API Key
+- 使用环境变量存储敏感信息
+- 监控API Key使用情况
 
-### 性能数据说明
+### 2. JWT Token 安全
+- Token具有过期时间，需要定期刷新
+- 在安全的地方存储Token
+- 登出时及时清理Token
+- 避免在URL中传递Token
 
-#### TPS (Ticks Per Second)
-- `last_10s`: 最近10秒的平均TPS
-- `last_1m`: 最近1分钟的平均TPS
-- `last_5m`: 最近5分钟的平均TPS
-- `server_load_percent`: 服务器负载百分比 (基于20TPS计算)
+### 3. 网络安全
+- 使用HTTPS加密传输
+- 配置适当的CORS策略
+- 实施IP白名单（如需要）
+- 监控异常访问模式
 
-#### MSPT (Milliseconds Per Tick)
-- `mean`: 平均每tick耗时
-- `max`: 最大每tick耗时
-- `min`: 最小每tick耗时
-- `percentile_95`: 95%分位数
+## 使用示例
 
-#### CPU 使用率
-- `system`: 系统整体CPU使用率
-- `process`: 服务器进程CPU使用率
+### 管理员登录并管理白名单
 
-#### 内存信息
-- `heap`: 堆内存使用情况
-- `non_heap`: 非堆内存使用情况
-- `pools`: 各内存池详细信息
+```bash
+# 1. 管理员登录
+curl -X POST http://localhost:8080/api/v1/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "admin",
+    "password": "your-password"
+  }'
 
-#### 垃圾回收 (GC)
-- `collectors`: 各垃圾回收器的统计信息
-- `total_collections`: 总回收次数
-- `total_time_ms`: 总回收耗时
-- `average_time_per_collection`: 平均每次回收耗时
+# 响应中获取JWT Token
+# {"success":true,"data":{"token":"eyJ..."}}
 
-## 错误代码
+# 2. 使用Token获取白名单
+curl -X GET http://localhost:8080/api/v1/whitelist \
+  -H "X-API-Key: your-api-key" \
+  -H "Authorization: Bearer eyJ..."
 
-| 代码 | 说明 |
-|------|------|
-| 400 | 请求参数错误 |
+# 3. 添加白名单条目
+curl -X POST http://localhost:8080/api/v1/whitelist \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "NewPlayer",
+    "notes": "新玩家"
+  }'
+```
+
+### 批量操作示例
+
+```bash
+# 批量添加白名单
+curl -X POST http://localhost:8080/api/v1/whitelist/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "entries": [
+      {
+        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+        "name": "Player1",
+        "notes": "VIP玩家"
+      },
+      {
+        "uuid": "550e8400-e29b-41d4-a716-446655440001", 
+        "name": "Player2",
+        "notes": "普通玩家"
+      }
+    ]
+  }'
+
+# 批量删除白名单
+curl -X DELETE http://localhost:8080/api/v1/whitelist/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "uuids": [
+      "550e8400-e29b-41d4-a716-446655440000",
+      "550e8400-e29b-41d4-a716-446655440001"
+    ]
+  }'
+```
+
+### 系统监控示例
+
+```bash
+# 获取服务器状态
+curl -X GET http://localhost:8080/api/v1/server/status
+
+# 获取服务器性能数据
+curl -X GET http://localhost:8080/api/v1/server/performance
+
+# 健康检查（无需认证）
+curl -X GET http://localhost:8080/api/v1/health
+```
+
+## 版本信息
+
+- **当前版本**: v0.1.0
+- **API版本**: v1
+- **最后更新**: 2024-01-01
+- **兼容性**: Minecraft 1.20.1, Arclight
+
+## 技术支持
+
+如果您在使用API时遇到问题，请：
+
+1. 检查本文档中的错误代码说明
+2. 验证请求格式和认证信息
+3. 查看服务器日志获取详细错误信息
+4. 联系技术支持团队
+
+---
+
+*本文档描述了ConvenientAccess白名单管理系统的完整API接口。系统提供了强大的白名单管理功能、多层安全认证和服务器监控能力，适用于生产环境的Minecraft服务器管理。*
 | 401 | 未授权访问 |
 | 403 | 访问被拒绝 |
 | 404 | API端点不存在 |
