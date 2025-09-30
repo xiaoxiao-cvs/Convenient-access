@@ -8,6 +8,9 @@ import com.xaoxiao.convenientaccess.auth.AdminAuthManager;
 import com.xaoxiao.convenientaccess.auth.ApiKeyManager;
 import com.xaoxiao.convenientaccess.auth.AuthenticationFilter;
 import com.xaoxiao.convenientaccess.database.DatabaseManager;
+import com.xaoxiao.convenientaccess.security.RateLimiter;
+import com.xaoxiao.convenientaccess.security.SecurityFilter;
+import com.xaoxiao.convenientaccess.security.SecurityMonitor;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,8 +18,8 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * 白名单管理系统主类（增强版）
- * 整合所有白名单相关组件，包括管理员认证系统
+ * 白名单管理系统主类（完整版）
+ * 整合所有白名单相关组件，包括管理员认证系统和安全防护机制
  */
 public class WhitelistSystem {
     private static final Logger logger = LoggerFactory.getLogger(WhitelistSystem.class);
@@ -29,6 +32,11 @@ public class WhitelistSystem {
     private SyncTaskManager syncTaskManager;
     private ApiKeyManager apiKeyManager;
     private AdminAuthManager adminAuthManager;
+    
+    // 安全组件
+    private RateLimiter rateLimiter;
+    private SecurityMonitor securityMonitor;
+    private SecurityFilter securityFilter;
     
     // API组件
     private WhitelistApiController whitelistApiController;
@@ -43,12 +51,12 @@ public class WhitelistSystem {
     }
     
     /**
-     * 初始化白名单系统（增强版）
+     * 初始化白名单系统（完整版）
      */
     public CompletableFuture<Boolean> initialize() {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                logger.info("正在初始化白名单管理系统（增强版）...");
+                logger.info("正在初始化白名单管理系统（完整版）...");
                 
                 // 初始化数据库管理器
                 databaseManager = new DatabaseManager(plugin);
@@ -85,6 +93,11 @@ public class WhitelistSystem {
                     throw new RuntimeException("管理员认证管理器初始化失败");
                 }
                 
+                // 初始化安全组件
+                rateLimiter = new RateLimiter();
+                securityMonitor = new SecurityMonitor(databaseManager);
+                securityFilter = new SecurityFilter(rateLimiter, securityMonitor);
+                
                 // 初始化API组件
                 whitelistApiController = new WhitelistApiController(whitelistManager, syncTaskManager);
                 adminApiController = new AdminApiController(adminAuthManager);
@@ -92,7 +105,7 @@ public class WhitelistSystem {
                 authenticationFilter = new AuthenticationFilter(apiKeyManager);
                 
                 initialized = true;
-                logger.info("白名单管理系统（增强版）初始化完成");
+                logger.info("白名单管理系统（完整版）初始化完成");
                 return true;
                 
             } catch (Exception e) {
@@ -109,6 +122,15 @@ public class WhitelistSystem {
         logger.info("正在关闭白名单管理系统...");
         
         try {
+            // 关闭安全组件
+            if (rateLimiter != null) {
+                rateLimiter.shutdown();
+            }
+            
+            if (securityMonitor != null) {
+                securityMonitor.shutdown();
+            }
+            
             // 关闭同步任务管理器
             if (syncTaskManager != null) {
                 syncTaskManager.shutdown();
@@ -124,13 +146,6 @@ public class WhitelistSystem {
         } catch (Exception e) {
             logger.error("关闭白名单管理系统时发生异常", e);
         }
-    }
-    
-    /**
-     * 检查系统是否已初始化
-     */
-    public boolean isInitialized() {
-        return initialized;
     }
     
     // Getters
@@ -150,8 +165,28 @@ public class WhitelistSystem {
         return apiKeyManager;
     }
     
+    public AdminAuthManager getAdminAuthManager() {
+        return adminAuthManager;
+    }
+    
+    public RateLimiter getRateLimiter() {
+        return rateLimiter;
+    }
+    
+    public SecurityMonitor getSecurityMonitor() {
+        return securityMonitor;
+    }
+    
+    public SecurityFilter getSecurityFilter() {
+        return securityFilter;
+    }
+    
     public WhitelistApiController getWhitelistApiController() {
         return whitelistApiController;
+    }
+    
+    public AdminApiController getAdminApiController() {
+        return adminApiController;
     }
     
     public ApiRouter getApiRouter() {
@@ -160,5 +195,12 @@ public class WhitelistSystem {
     
     public AuthenticationFilter getAuthenticationFilter() {
         return authenticationFilter;
+    }
+    
+    /**
+     * 检查系统是否已初始化
+     */
+    public boolean isInitialized() {
+        return initialized;
     }
 }
