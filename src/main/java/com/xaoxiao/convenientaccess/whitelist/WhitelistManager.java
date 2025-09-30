@@ -180,7 +180,7 @@ public class WhitelistManager {
                         }
                         return Optional.of(entry);
                     }
-                    return Optional.empty();
+                    return Optional.<WhitelistEntry>empty();
                 }
             }
         }).exceptionally(throwable -> {
@@ -406,9 +406,289 @@ public class WhitelistManager {
     }
     
     /**
-     * 重新加载缓存
+     * 分页查询白名单条目
      */
-    public CompletableFuture<Boolean> reloadCache() {
-        return loadCache();
+    public CompletableFuture<PaginatedResult<WhitelistEntry>> getWhitelistPaginated(
+            int page, int size, String search, String source, String addedBy, 
+            String sort, String order, String startDate, String endDate) {
+        
+        return databaseManager.executeAsync(connection -> {
+            // 构建查询条件
+            WhitelistQueryBuilder queryBuilder = new WhitelistQueryBuilder()
+                    .filterByActive(true)
+                    .paginate(page, size);
+            
+            // 添加搜索条件
+            if (search != null && !search.trim().isEmpty()) {
+                queryBuilder.searchByName(search);
+            }
+            
+            if (source != null && !source.trim().isEmpty()) {
+                queryBuilder.filterBySource(source);
+            }
+            
+            if (addedBy != null && !addedBy.trim().isEmpty()) {
+                queryBuilder.filterByAddedBy(addedBy);
+            }
+            
+            if (startDate != null || endDate != null) {
+                queryBuilder.filterByDateRange(startDate, endDate);
+            }
+            
+            // 设置排序
+            if (sort != null && !sort.trim().isEmpty()) {
+                queryBuilder.orderBy(sort, order);
+            }
+            
+            // 执行查询
+            WhitelistQueryBuilder.QueryResult queryResult = queryBuilder.build();
+            WhitelistQueryBuilder.QueryResult countResult = queryBuilder.buildCount();
+            
+            // 获取总数
+            long total = 0;
+            try (PreparedStatement countStmt = connection.prepareStatement(countResult.getSql())) {
+                setParameters(countStmt, countResult.getParameters());
+                try (ResultSet rs = countStmt.executeQuery()) {
+                    if (rs.next()) {
+                        total = rs.getLong(1);
+                    }
+                }
+            }
+            
+            // 获取数据
+            List<WhitelistEntry> items = new ArrayList<>();
+            try (PreparedStatement stmt = connection.prepareStatement(queryResult.getSql())) {
+                setParameters(stmt, queryResult.getParameters());
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        items.add(mapResultSetToEntry(rs));
+                    }
+                }
+            }
+            
+            return new PaginatedResult<>(items, page, size, total);
+        }).exceptionally(throwable -> {
+            logger.error("分页查询白名单失败", throwable);
+            return new PaginatedResult<>(new ArrayList<>(), page, size, 0);
+        });
     }
-}
+    
+    /**
+     * 高级搜索白名单条目
+     */
+    public CompletableFuture<List<WhitelistEntry>> searchWhitelistAdvanced(
+            String namePattern, String uuidPattern, String sourceFilter, 
+            String addedByFilter, int limit) {
+        
+        return databaseManager.executeAsync(connection -> {
+            WhitelistQueryBuilder queryBuilder = new WhitelistQueryBuilder()
+                    .filterByActive(true);
+            
+            // 添加搜索条件
+            if (namePattern != null && !namePattern.trim().isEmpty()) {
+                queryBuilder.searchByName(namePattern);
+            }
+            
+            if (uuidPattern != null && !uuidPattern.trim().isEmpty()) {
+                queryBuilder.filterByUuid(uuidPattern);
+            }
+            
+            if (sourceFilter != null && !sourceFilter.trim().isEmpty()) {
+                queryBuilder.filterBySource(sourceFilter);
+            }
+            
+            if (addedByFilter != null && !addedByFilter.trim().isEmpty()) {
+                queryBuilder.filterByAddedBy(addedByFilter);
+            }
+            
+            // 设置限制
+            if (limit > 0) {
+                queryBuilder.paginate(1, Math.min(limit, 100));
+            }
+            
+            WhitelistQueryBuilder.QueryResult queryResult = queryBuilder.build();
+            
+            List<WhitelistEntry> results = new ArrayList<>();
+            try (PreparedStatement stmt = connection.prepareStatement(queryResult.getSql())) {
+                setParameters(stmt, queryResult.getParameters());
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        results.add(mapResultSetToEntry(rs));
+                    }
+                }
+            }
+            
+            return results;
+        }).exceptionally(throwable -> {
+            logger.error("高级搜索白名单失败", throwable);
+            return new ArrayList<>();
+        });
+    }
+    
+    /**
+     * 设置PreparedStatement参数
+     */
+    private void setParameters(PreparedStatement stmt, List<Object> parameters) throws SQLException {
+        for (int i = 0; i < parameters.size(); i++) {
+            Object param = parameters.get(i);
+            if (param instanceof String) {
+                stmt.setString(i + 1, (String) param);
+            } else if (param instanceof Integer) {
+                stmt.setInt(i + 1, (Integer) param);
+            } else if (param instanceof Long) {
+                stmt.setLong(i + 1, (Long) param);
+            } else if (param instanceof Boolean) {
+                stmt.setBoolean(i + 1, (Boolean) param);
+            } else if (param instanceof LocalDateTime) {
+                stmt.setTimestamp(i + 1, Timestamp.valueOf((LocalDateTime) param));
+            } else {
+                stmt.setObject(i + 1, param);
+            }
+        }
+    }
+    
+    /**
+     * 执行批量操作
+     */
+    public CompletableFuture<BatchOperation.BatchResult> executeBatchOperation(BatchOperation batchOperation) {
+        if (batchOperation.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                new BatchOperation.BatchResult(0, 0, 0, List.of("批量操作为空"), new ArrayList<>(), new ArrayList<>())
+            );
+        }
+        
+        return databaseManager.executeTransactionAsync(connection -> {
+            List<String> errors = new ArrayList<>();
+            List<String> successfulUuids = new ArrayList<>();
+            List<String> failedUuids = new ArrayList<>();
+            int successCount = 0;
+            int failureCount = 0;
+            
+            if (batchOperation.getOperationType() == BatchOperation.OperationType.ADD) {
+                // 批量添加
+                String sql = """
+                    INSERT OR IGNORE INTO whitelist (name, uuid, added_by_name, added_by_uuid, added_at, source, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """;
+                
+                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                    for (WhitelistEntry entry : batchOperation.getEntries()) {
+                        try {
+                            // 验证数据
+                            if (!isValidPlayerName(entry.getName()) || !isValidUuid(entry.getUuid())) {
+                                errors.add("无效的玩家数据: " + entry.getName() + " (" + entry.getUuid() + ")");
+                                failedUuids.add(entry.getUuid());
+                                failureCount++;
+                                continue;
+                            }
+                            
+                            stmt.setString(1, entry.getName());
+                            stmt.setString(2, entry.getUuid());
+                            stmt.setString(3, entry.getAddedByName());
+                            stmt.setString(4, entry.getAddedByUuid());
+                            stmt.setTimestamp(5, Timestamp.valueOf(entry.getAddedAt()));
+                            stmt.setString(6, entry.getSource());
+                            stmt.setBoolean(7, entry.isActive());
+                            
+                            int affected = stmt.executeUpdate();
+                            if (affected > 0) {
+                                successfulUuids.add(entry.getUuid());
+                                successCount++;
+                                
+                                // 更新缓存
+                                if (cacheLoaded) {
+                                    cache.put(entry.getUuid(), entry);
+                                }
+                            } else {
+                                errors.add("玩家已存在: " + entry.getName() + " (" + entry.getUuid() + ")");
+                                failedUuids.add(entry.getUuid());
+                                failureCount++;
+                            }
+                        } catch (SQLException e) {
+                            errors.add("添加玩家失败: " + entry.getName() + " - " + e.getMessage());
+                            failedUuids.add(entry.getUuid());
+                            failureCount++;
+                        }
+                    }
+                }
+                
+            } else if (batchOperation.getOperationType() == BatchOperation.OperationType.REMOVE) {
+                // 批量删除
+                String sql = "DELETE FROM whitelist WHERE uuid = ?";
+                
+                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                    for (WhitelistEntry entry : batchOperation.getEntries()) {
+                        try {
+                            stmt.setString(1, entry.getUuid());
+                            
+                            int affected = stmt.executeUpdate();
+                            if (affected > 0) {
+                                successfulUuids.add(entry.getUuid());
+                                successCount++;
+                                
+                                // 更新缓存
+                                cache.remove(entry.getUuid());
+                            } else {
+                                errors.add("玩家不存在: " + entry.getUuid());
+                                failedUuids.add(entry.getUuid());
+                                failureCount++;
+                            }
+                        } catch (SQLException e) {
+                            errors.add("删除玩家失败: " + entry.getUuid() + " - " + e.getMessage());
+                            failedUuids.add(entry.getUuid());
+                            failureCount++;
+                        }
+                    }
+                }
+            }
+            
+            logger.info("批量操作完成: {} - 成功: {}, 失败: {}", 
+                    batchOperation.getOperationType(), successCount, failureCount);
+            
+            return new BatchOperation.BatchResult(
+                batchOperation.getSize(), successCount, failureCount, 
+                errors, successfulUuids, failedUuids
+            );
+            
+        }).exceptionally(throwable -> {
+            logger.error("批量操作执行失败", throwable);
+            List<String> errorList = List.of("批量操作执行失败: " + throwable.getMessage());
+            List<String> allUuids = batchOperation.getEntries().stream()
+                    .map(WhitelistEntry::getUuid)
+                    .toList();
+            return new BatchOperation.BatchResult(
+                batchOperation.getSize(), 0, batchOperation.getSize(), 
+                errorList, new ArrayList<>(), allUuids
+            );
+        });
+    }
+    
+    /**
+     * 批量删除玩家（通过UUID列表）
+     */
+    public CompletableFuture<BatchOperation.BatchResult> batchRemovePlayersByUuid(
+            List<String> uuids, String operatorName, String operatorUuid) {
+        
+        BatchOperation batchOperation = new BatchOperation(
+            BatchOperation.OperationType.REMOVE, operatorName, operatorUuid
+        );
+        
+        // 添加要删除的条目
+        for (String uuid : uuids) {
+            if (isValidUuid(uuid)) {
+                WhitelistEntry entry = new WhitelistEntry();
+                entry.setUuid(uuid);
+                batchOperation.addEntry(entry);
+            }
+        }
+        
+        return executeBatchOperation(batchOperation);
+     }
+     
+     /**
+      * 重新加载缓存
+      */
+     public CompletableFuture<Boolean> reloadCache() {
+         return loadCache();
+     }
+ }

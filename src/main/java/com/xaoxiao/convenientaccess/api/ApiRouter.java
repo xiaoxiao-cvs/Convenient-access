@@ -8,31 +8,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * API路由器
- * 处理HTTP请求路由分发
+ * 处理HTTP请求路由到相应的控制器
  */
 public class ApiRouter extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(ApiRouter.class);
     
     private final WhitelistApiController whitelistController;
+    private final AdminApiController adminController;
     
-    // 路由模式
-    private static final Pattern WHITELIST_UUID_PATTERN = Pattern.compile("^/api/v1/whitelist/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$");
-    
-    public ApiRouter(WhitelistApiController whitelistController) {
+    public ApiRouter(WhitelistApiController whitelistController, AdminApiController adminController) {
         this.whitelistController = whitelistController;
+        this.adminController = adminController;
     }
     
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) 
             throws ServletException, IOException {
-        
-        // 设置CORS头
-        setCorsHeaders(response);
         
         String path = request.getPathInfo();
         if (path == null) {
@@ -55,22 +49,26 @@ public class ApiRouter extends HttpServlet {
                     whitelistController.handleGetSyncStatus(request, response);
                     break;
                     
-                default:
-                    sendNotFound(response);
+                case "/api/v1/admin/session":
+                    adminController.handleValidateSession(request, response);
                     break;
+                    
+                case "/api/v1/admin/profile":
+                    adminController.handleGetProfile(request, response);
+                    break;
+                    
+                default:
+                    send404Response(response, "API端点不存在: " + path);
             }
         } catch (Exception e) {
             logger.error("处理GET请求失败: {}", path, e);
-            sendInternalError(response);
+            send500Response(response, "服务器内部错误");
         }
     }
     
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) 
             throws ServletException, IOException {
-        
-        // 设置CORS头
-        setCorsHeaders(response);
         
         String path = request.getPathInfo();
         if (path == null) {
@@ -85,26 +83,34 @@ public class ApiRouter extends HttpServlet {
                     whitelistController.handleAddPlayer(request, response);
                     break;
                     
+                case "/api/v1/whitelist/batch":
+                    whitelistController.handleBatchOperation(request, response);
+                    break;
+                    
                 case "/api/v1/whitelist/sync":
                     whitelistController.handleTriggerSync(request, response);
                     break;
                     
-                default:
-                    sendNotFound(response);
+                case "/api/v1/admin/login":
+                    adminController.handleLogin(request, response);
                     break;
+                    
+                case "/api/v1/admin/logout":
+                    adminController.handleLogout(request, response);
+                    break;
+                    
+                default:
+                    send404Response(response, "API端点不存在: " + path);
             }
         } catch (Exception e) {
             logger.error("处理POST请求失败: {}", path, e);
-            sendInternalError(response);
+            send500Response(response, "服务器内部错误");
         }
     }
     
     @Override
     protected void doDelete(HttpServletRequest request, HttpServletResponse response) 
             throws ServletException, IOException {
-        
-        // 设置CORS头
-        setCorsHeaders(response);
         
         String path = request.getPathInfo();
         if (path == null) {
@@ -114,17 +120,21 @@ public class ApiRouter extends HttpServlet {
         logger.debug("处理DELETE请求: {}", path);
         
         try {
-            // 匹配 /api/v1/whitelist/{uuid} 模式
-            Matcher matcher = WHITELIST_UUID_PATTERN.matcher(path);
-            if (matcher.matches()) {
-                String uuid = matcher.group(1);
-                whitelistController.handleRemovePlayer(request, response, uuid);
+            if (path.startsWith("/api/v1/whitelist/")) {
+                // 提取UUID参数
+                String[] pathParts = path.split("/");
+                if (pathParts.length >= 5) {
+                    String uuid = pathParts[4];
+                    whitelistController.handleRemovePlayer(request, response, uuid);
+                } else {
+                    send404Response(response, "缺少UUID参数");
+                }
             } else {
-                sendNotFound(response);
+                send404Response(response, "API端点不存在: " + path);
             }
         } catch (Exception e) {
             logger.error("处理DELETE请求失败: {}", path, e);
-            sendInternalError(response);
+            send500Response(response, "服务器内部错误");
         }
     }
     
@@ -133,37 +143,34 @@ public class ApiRouter extends HttpServlet {
             throws ServletException, IOException {
         
         // 处理CORS预检请求
-        setCorsHeaders(response);
-        response.setStatus(HttpServletResponse.SC_OK);
-    }
-    
-    /**
-     * 设置CORS头
-     */
-    private void setCorsHeaders(HttpServletResponse response) {
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Version");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-ID, X-API-Key");
         response.setHeader("Access-Control-Max-Age", "3600");
+        response.setStatus(HttpServletResponse.SC_OK);
     }
     
     /**
      * 发送404响应
      */
-    private void sendNotFound(HttpServletResponse response) throws IOException {
+    private void send404Response(HttpServletResponse response, String message) throws IOException {
         response.setStatus(404);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
-        response.getWriter().write("{\"success\":false,\"error\":\"API端点未找到\",\"code\":404}");
+        
+        ApiResponse<Object> apiResponse = ApiResponse.notFound(message);
+        response.getWriter().write(apiResponse.toString());
     }
     
     /**
      * 发送500响应
      */
-    private void sendInternalError(HttpServletResponse response) throws IOException {
+    private void send500Response(HttpServletResponse response, String message) throws IOException {
         response.setStatus(500);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
-        response.getWriter().write("{\"success\":false,\"error\":\"服务器内部错误\",\"code\":500}");
+        
+        ApiResponse<Object> apiResponse = ApiResponse.error(message);
+        response.getWriter().write(apiResponse.toString());
     }
 }

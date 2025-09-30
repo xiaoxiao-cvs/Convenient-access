@@ -25,8 +25,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 同步任务管理器
+ * 同步任务管理器（增强版）
  * 管理数据库与JSON文件的同步、任务队列调度和执行、错误处理和重试机制
+ * 支持优先级队列、批量处理、冲突解决和智能重试
  */
 public class SyncTaskManager {
     private static final Logger logger = LoggerFactory.getLogger(SyncTaskManager.class);
@@ -37,6 +38,10 @@ public class SyncTaskManager {
     private final ScheduledExecutorService scheduler;
     private final ExecutorService taskExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    
+    // 增强功能组件
+    private final TaskQueue taskQueue;
+    private final SyncConflictResolver conflictResolver;
     
     private String whitelistJsonPath;
     private long lastSyncTime = 0;
@@ -49,17 +54,21 @@ public class SyncTaskManager {
                 .setDateFormat("yyyy-MM-dd HH:mm:ss")
                 .create();
         
-        this.scheduler = Executors.newScheduledThreadPool(2, r -> {
+        this.scheduler = Executors.newScheduledThreadPool(3, r -> {
             Thread thread = new Thread(r, "SyncTaskManager-Scheduler");
             thread.setDaemon(true);
             return thread;
         });
         
-        this.taskExecutor = Executors.newFixedThreadPool(3, r -> {
+        this.taskExecutor = Executors.newFixedThreadPool(4, r -> {
             Thread thread = new Thread(r, "SyncTaskManager-Executor");
             thread.setDaemon(true);
             return thread;
         });
+        
+        // 初始化增强组件
+        this.taskQueue = new TaskQueue();
+        this.conflictResolver = new SyncConflictResolver();
         
         // 默认白名单文件路径
         this.whitelistJsonPath = "whitelist.json";
@@ -93,11 +102,19 @@ public class SyncTaskManager {
     }
     
     /**
-     * 创建同步任务
+     * 创建同步任务（增强版）
      */
     public CompletableFuture<Long> createTask(SyncTask.TaskType taskType, String data, int priority) {
+        // 优先使用任务队列
         SyncTask task = new SyncTask(taskType, data, priority);
+        boolean added = taskQueue.addTask(task);
         
+        if (added) {
+            logger.debug("任务已添加到队列: {} (类型: {}, 优先级: {})", task.getId(), taskType, priority);
+            return CompletableFuture.completedFuture(task.getId());
+        }
+        
+        // 队列添加失败，回退到数据库方式
         return databaseManager.executeTransactionAsync(connection -> {
             String sql = """
                 INSERT INTO sync_tasks (task_type, status, priority, data, retry_count, max_retries, created_at, updated_at)
@@ -130,6 +147,170 @@ public class SyncTaskManager {
             logger.error("创建同步任务失败: {}", taskType, throwable);
             return -1L;
         });
+    }
+    
+    /**
+     * 处理增强任务（支持重试和批量处理）
+     */
+    private void processEnhancedTasks() {
+        if (!running.get()) {
+            return;
+        }
+        
+        try {
+            List<SyncTask> pendingTasks = getPendingTasks(5);
+            for (SyncTask task : pendingTasks) {
+                taskExecutor.submit(() -> executeTaskWithEnhancedRetry(task));
+            }
+        } catch (Exception e) {
+            logger.error("处理增强任务时发生错误", e);
+        }
+    }
+    
+    /**
+     * 执行任务（增强重试机制）
+     */
+    private void executeTaskWithEnhancedRetry(SyncTask task) {
+        try {
+            // 更新任务状态为处理中
+            updateTaskStatus(task.getId(), SyncTask.TaskStatus.PROCESSING, null);
+            task.markStarted();
+            
+            boolean success = false;
+            String errorMessage = null;
+            
+            switch (task.getTaskType()) {
+                case FULL_SYNC:
+                    success = executeFullSyncWithConflictResolution();
+                    break;
+                case ADD_PLAYER:
+                    success = executeAddPlayer(task.getData());
+                    break;
+                case REMOVE_PLAYER:
+                    success = executeRemovePlayer(task.getData());
+                    break;
+                case BATCH_UPDATE:
+                    success = executeBatchUpdate(task.getData());
+                    break;
+                default:
+                    errorMessage = "未知的任务类型: " + task.getTaskType();
+            }
+            
+            if (success) {
+                // 任务成功完成
+                updateTaskStatus(task.getId(), SyncTask.TaskStatus.COMPLETED, null);
+                logger.debug("任务执行成功: {} (ID: {})", task.getTaskType(), task.getId());
+            } else {
+                // 任务失败，检查是否可以重试
+                handleTaskFailureWithRetry(task, errorMessage);
+            }
+            
+        } catch (Exception e) {
+            logger.error("执行任务时发生异常: {} (ID: {})", task.getTaskType(), task.getId(), e);
+            handleTaskFailureWithRetry(task, e.getMessage());
+        }
+    }
+    
+    /**
+     * 处理任务失败（增强重试）
+     */
+    private void handleTaskFailureWithRetry(SyncTask task, String errorMessage) {
+        task.incrementRetryCount();
+        
+        if (task.canRetry()) {
+            // 计算重试延迟
+            long retryDelay = RetryStrategy.calculateRetryDelay(task.getRetryCount(), task.getTaskType());
+            
+            // 重新调度任务
+            updateTaskStatus(task.getId(), SyncTask.TaskStatus.PENDING, 
+                    "重试 " + task.getRetryCount() + "/" + task.getMaxRetries() + " - " + errorMessage);
+            
+            logger.warn("任务执行失败，将在{}ms后重试: {} (ID: {}, 重试次数: {})", 
+                    retryDelay, task.getTaskType(), task.getId(), task.getRetryCount());
+        } else {
+            // 超过最大重试次数，标记为失败
+            updateTaskStatus(task.getId(), SyncTask.TaskStatus.FAILED, errorMessage);
+            logger.error("任务执行失败，已达到最大重试次数: {} (ID: {})", 
+                    task.getTaskType(), task.getId());
+        }
+    }
+    
+    /**
+     * 执行全量同步（带冲突解决）
+     */
+    private boolean executeFullSyncWithConflictResolution() {
+        try {
+            // 从数据库读取所有活跃的白名单条目
+            List<WhitelistEntry> databaseEntries = databaseManager.executeAsync(connection -> {
+                String sql = "SELECT * FROM whitelist WHERE is_active = 1 ORDER BY name";
+                List<WhitelistEntry> result = new ArrayList<>();
+                
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    
+                    while (rs.next()) {
+                        WhitelistEntry entry = new WhitelistEntry();
+                        entry.setId(rs.getLong("id"));
+                        entry.setName(rs.getString("name"));
+                        entry.setUuid(rs.getString("uuid"));
+                        entry.setAddedByName(rs.getString("added_by_name"));
+                        entry.setAddedByUuid(rs.getString("added_by_uuid"));
+                        entry.setAddedAt(rs.getTimestamp("added_at").toLocalDateTime());
+                        entry.setSource(rs.getString("source"));
+                        entry.setActive(rs.getBoolean("is_active"));
+                        entry.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
+                        entry.setUpdatedAt(rs.getTimestamp("updated_at").toLocalDateTime());
+                        result.add(entry);
+                    }
+                }
+                return result;
+            }).get(10, TimeUnit.SECONDS);
+            
+            // 从JSON文件读取白名单
+            List<WhitelistEntry> jsonEntries = readWhitelistFromJson();
+            
+            // 使用冲突解决器
+            SyncConflictResolver.ConflictResolution resolution = 
+                    conflictResolver.resolveConflicts(databaseEntries, jsonEntries);
+            
+            if (resolution.hasConflicts()) {
+                logger.info("检测到同步冲突，开始解决: {} 个变更", resolution.getTotalChanges());
+                
+                // 简化的冲突解决：直接使用数据库数据覆盖JSON
+                writeWhitelistToJson(databaseEntries);
+                
+                logger.info("冲突解决完成，使用数据库数据");
+            } else {
+                // 没有冲突，正常同步
+                writeWhitelistToJson(databaseEntries);
+            }
+            
+            return true;
+            
+        } catch (Exception e) {
+            logger.error("执行全量同步失败", e);
+            return false;
+        }
+    }
+    
+    /**
+     * 检测和解决冲突
+     */
+    private void detectAndResolveConflicts() {
+        if (!running.get()) {
+            return;
+        }
+        
+        try {
+            logger.debug("开始定期冲突检测");
+            
+            // 创建一个全量同步任务来检测冲突
+            SyncTask conflictCheckTask = new SyncTask(SyncTask.TaskType.FULL_SYNC, "{\"type\":\"conflict_check\"}", 1);
+            taskQueue.addTask(conflictCheckTask);
+            
+        } catch (Exception e) {
+            logger.error("冲突检测失败", e);
+        }
     }
     
     /**

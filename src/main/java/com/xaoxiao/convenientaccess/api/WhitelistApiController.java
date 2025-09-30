@@ -1,9 +1,12 @@
 package com.xaoxiao.convenientaccess.api;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.xaoxiao.convenientaccess.sync.SyncTask;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
+import com.xaoxiao.convenientaccess.whitelist.BatchOperation;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistEntry;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistManager;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistStats;
@@ -48,25 +51,26 @@ public class WhitelistApiController {
             String addedBy = request.getParameter("added_by");
             String sort = request.getParameter("sort");
             String order = request.getParameter("order");
+            String startDate = request.getParameter("start_date");
+            String endDate = request.getParameter("end_date");
             
-            // TODO: 实现分页查询（第二阶段功能）
-            // 目前返回简单的搜索结果
-            CompletableFuture<List<WhitelistEntry>> future;
-            if (search != null && !search.trim().isEmpty()) {
-                future = whitelistManager.searchPlayersByName(search.trim(), size);
-            } else {
-                // 返回空列表，等待第二阶段实现完整分页
-                future = CompletableFuture.completedFuture(new ArrayList<>());
-            }
-            
-            future.thenAccept(items -> {
-                PaginationResult<WhitelistEntry> result = new PaginationResult<>(items, page, size, items.size());
-                sendJsonResponse(response, 200, ApiResponse.success(result));
-            }).exceptionally(throwable -> {
-                logger.error("查询白名单失败", throwable);
-                sendJsonResponse(response, 500, ApiResponse.error("查询白名单失败"));
-                return null;
-            });
+            // 使用新的分页查询方法
+            whitelistManager.getWhitelistPaginated(page, size, search, source, addedBy, sort, order, startDate, endDate)
+                .thenAccept(result -> {
+                    // 转换为API响应格式
+                    PaginationResult<WhitelistEntry> apiResult = new PaginationResult<>(
+                        result.getItems(), 
+                        result.getPage(), 
+                        result.getSize(), 
+                        result.getTotal()
+                    );
+                    sendJsonResponse(response, 200, ApiResponse.success(apiResult));
+                })
+                .exceptionally(throwable -> {
+                    logger.error("查询白名单失败", throwable);
+                    sendJsonResponse(response, 500, ApiResponse.error("查询白名单失败"));
+                    return null;
+                });
             
         } catch (Exception e) {
             logger.error("处理白名单查询请求失败", e);
@@ -314,9 +318,174 @@ public class WhitelistApiController {
     }
     
     /**
-     * 验证UUID格式
+     * 处理POST /api/v1/whitelist/batch - 批量操作
      */
-    private boolean isValidUuid(String uuid) {
-        return uuid != null && uuid.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
-    }
-}
+    public void handleBatchOperation(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            // 读取请求体
+            String requestBody = readRequestBody(request);
+            JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
+            
+            // 参数验证
+            if (!json.has("operation") || !json.has("players")) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: operation, players"));
+                return;
+            }
+            
+            String operation = json.get("operation").getAsString();
+            JsonArray playersArray = json.getAsJsonArray("players");
+            
+            if (playersArray.size() == 0) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家列表不能为空"));
+                return;
+            }
+            
+            if (playersArray.size() > 100) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("批量操作最多支持100个玩家"));
+                return;
+            }
+            
+            // 获取操作者信息
+            String addedByName = json.has("added_by_name") ? json.get("added_by_name").getAsString() : "API";
+            String addedByUuid = json.has("added_by_uuid") ? json.get("added_by_uuid").getAsString() : "00000000-0000-0000-0000-000000000000";
+            String sourceStr = json.has("source") ? json.get("source").getAsString() : "ADMIN";
+            
+            WhitelistEntry.Source source;
+            try {
+                source = WhitelistEntry.Source.fromString(sourceStr);
+            } catch (IllegalArgumentException e) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("无效的来源类型"));
+                return;
+            }
+            
+            if ("add".equalsIgnoreCase(operation)) {
+                // 批量添加
+                BatchOperation batchOperation = new BatchOperation(
+                    BatchOperation.OperationType.ADD, addedByName, addedByUuid
+                );
+                
+                // 解析玩家列表
+                for (int i = 0; i < playersArray.size(); i++) {
+                    JsonObject playerObj = playersArray.get(i).getAsJsonObject();
+                    
+                    if (!playerObj.has("name") || !playerObj.has("uuid")) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("玩家信息缺少name或uuid字段"));
+                        return;
+                    }
+                    
+                    String name = playerObj.get("name").getAsString();
+                    String uuid = playerObj.get("uuid").getAsString();
+                    
+                    if (!isValidPlayerName(name) || !isValidUuid(uuid)) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("无效的玩家数据: " + name + " (" + uuid + ")"));
+                        return;
+                    }
+                    
+                    batchOperation.addEntry(name, uuid, source);
+                }
+                
+                // 执行批量添加
+                whitelistManager.executeBatchOperation(batchOperation)
+                    .thenAccept(result -> {
+                        // 创建同步任务
+                        if (result.getSuccessCount() > 0) {
+                            syncTaskManager.createTask(SyncTask.TaskType.BATCH_UPDATE, "{\"operation\":\"batch_add\"}", 2);
+                        }
+                        
+                        JsonObject responseData = new JsonObject();
+                        responseData.addProperty("operation", "add");
+                        responseData.addProperty("total_requested", result.getTotalRequested());
+                        responseData.addProperty("success_count", result.getSuccessCount());
+                        responseData.addProperty("failure_count", result.getFailureCount());
+                        responseData.addProperty("success_rate", result.getSuccessRate());
+                        
+                        if (!result.getErrors().isEmpty()) {
+                            responseData.add("errors", gson.toJsonTree(result.getErrors()));
+                        }
+                        
+                        if (result.isCompleteSuccess()) {
+                            sendJsonResponse(response, 200, ApiResponse.success(responseData, "批量添加完成"));
+                        } else if (result.isCompleteFailure()) {
+                            sendJsonResponse(response, 400, ApiResponse.badRequest("批量添加全部失败"));
+                        } else {
+                            sendJsonResponse(response, 207, ApiResponse.success(responseData, "批量添加部分成功"));
+                        }
+                    })
+                    .exceptionally(throwable -> {
+                        logger.error("批量添加失败", throwable);
+                        sendJsonResponse(response, 500, ApiResponse.error("批量添加失败"));
+                        return null;
+                    });
+                    
+            } else if ("remove".equalsIgnoreCase(operation)) {
+                // 批量删除
+                List<String> uuids = new ArrayList<>();
+                
+                // 解析UUID列表
+                for (int i = 0; i < playersArray.size(); i++) {
+                    JsonObject playerObj = playersArray.get(i).getAsJsonObject();
+                    
+                    if (!playerObj.has("uuid")) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("删除操作需要uuid字段"));
+                        return;
+                    }
+                    
+                    String uuid = playerObj.get("uuid").getAsString();
+                    if (!isValidUuid(uuid)) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("无效的UUID: " + uuid));
+                        return;
+                    }
+                    
+                    uuids.add(uuid);
+                }
+                
+                // 执行批量删除
+                whitelistManager.batchRemovePlayersByUuid(uuids, addedByName, addedByUuid)
+                    .thenAccept(result -> {
+                        // 创建同步任务
+                        if (result.getSuccessCount() > 0) {
+                            syncTaskManager.createTask(SyncTask.TaskType.BATCH_UPDATE, "{\"operation\":\"batch_remove\"}", 2);
+                        }
+                        
+                        JsonObject responseData = new JsonObject();
+                        responseData.addProperty("operation", "remove");
+                        responseData.addProperty("total_requested", result.getTotalRequested());
+                        responseData.addProperty("success_count", result.getSuccessCount());
+                        responseData.addProperty("failure_count", result.getFailureCount());
+                        responseData.addProperty("success_rate", result.getSuccessRate());
+                        
+                        if (!result.getErrors().isEmpty()) {
+                            responseData.add("errors", gson.toJsonTree(result.getErrors()));
+                        }
+                        
+                        if (result.isCompleteSuccess()) {
+                            sendJsonResponse(response, 200, ApiResponse.success(responseData, "批量删除完成"));
+                        } else if (result.isCompleteFailure()) {
+                            sendJsonResponse(response, 400, ApiResponse.badRequest("批量删除全部失败"));
+                        } else {
+                            sendJsonResponse(response, 207, ApiResponse.success(responseData, "批量删除部分成功"));
+                        }
+                    })
+                    .exceptionally(throwable -> {
+                        logger.error("批量删除失败", throwable);
+                        sendJsonResponse(response, 500, ApiResponse.error("批量删除失败"));
+                        return null;
+                    });
+                    
+            } else {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("不支持的操作类型: " + operation));
+            }
+            
+        } catch (Exception e) {
+             logger.error("处理批量操作请求失败", e);
+             sendJsonResponse(response, 500, ApiResponse.error("服务器内部错误"));
+         }
+     }
+      
+      /**
+       * 验证UUID格式
+       */
+      private boolean isValidUuid(String uuid) {
+          return uuid != null && uuid.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+      }
+  }
