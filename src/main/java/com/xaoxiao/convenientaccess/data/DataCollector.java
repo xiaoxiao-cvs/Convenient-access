@@ -416,11 +416,17 @@ public class DataCollector {
     
     private int getPing(Player player) {
         try {
-            // 使用反射获取ping值
-            Object handle = player.getClass().getMethod("getHandle").invoke(player);
-            return (Integer) handle.getClass().getField("ping").get(handle);
+            // 使用官方API获取ping值 (Bukkit 1.17+)
+            return player.getPing();
         } catch (Exception e) {
-            return -1; // 无法获取ping值
+            // 如果官方API不可用，尝试使用反射方式 (兼容旧版本)
+            try {
+                Object handle = player.getClass().getMethod("getHandle").invoke(player);
+                return (Integer) handle.getClass().getField("ping").get(handle);
+            } catch (Exception reflectionException) {
+                plugin.getLogger().warning("无法获取玩家 " + player.getName() + " 的ping值: " + reflectionException.getMessage());
+                return -1; // 无法获取ping值
+            }
         }
     }
     

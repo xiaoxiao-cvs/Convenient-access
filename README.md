@@ -86,10 +86,10 @@ API 文档包含：
 
 ```bash
 # 获取服务器状态
-curl http://localhost:8080/api/v1/status
+curl http://localhost:8080/api/v1/server/status
 
 # 获取性能数据
-curl http://localhost:8080/api/v1/performance
+curl http://localhost:8080/api/v1/server/performance
 
 # 获取在线玩家列表
 curl http://localhost:8080/api/v1/players/list

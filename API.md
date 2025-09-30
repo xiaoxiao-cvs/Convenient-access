@@ -10,6 +10,19 @@ ConvenientAccess 提供了一套完整的 RESTful API，用于获取 Minecraft 1
 - **内容类型**: `application/json`
 - **字符编码**: `UTF-8`
 
+## 所有可用端点
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/v1/server/status` | GET | 获取服务器基本状态信息 |
+| `/api/v1/server/info` | GET | 获取详细的服务器信息 |
+| `/api/v1/server/performance` | GET | 获取详细的服务器性能数据 |
+| `/api/v1/players/online` | GET | 获取在线玩家的基本统计信息 |
+| `/api/v1/players/list` | GET | 获取详细的在线玩家列表 |
+| `/api/v1/worlds/list` | GET | 获取服务器所有世界的详细信息 |
+| `/api/v1/system/resources` | GET | 获取系统资源使用情况 |
+| `/api/v1/health` | GET | 简单的健康检查端点 |
+
 ## 认证
 
 如果启用了 API 认证，需要在请求头中包含 API 密钥：
@@ -46,11 +59,11 @@ Authorization: Bearer YOUR_API_KEY
 }
 ```
 
-## API 端点
+## API 端点详细说明
 
 ### 1. 服务器状态
 
-#### `GET /api/v1/status`
+#### `GET /api/v1/server/status`
 
 获取服务器基本状态信息。
 
@@ -98,7 +111,7 @@ Authorization: Bearer YOUR_API_KEY
 
 ### 3. 性能数据
 
-#### `GET /api/v1/performance`
+#### `GET /api/v1/server/performance`
 
 获取详细的服务器性能数据，包括 TPS、MSPT、CPU、内存、GC 和线程信息。
 
@@ -206,7 +219,7 @@ Authorization: Bearer YOUR_API_KEY
 
 ### 4. 玩家信息
 
-#### `GET /api/v1/players`
+#### `GET /api/v1/players/online`
 
 获取在线玩家的基本统计信息。
 
@@ -480,7 +493,7 @@ API 支持跨域请求，默认允许所有来源。可以在配置文件中自�
 
 ```javascript
 // 获取服务器状态
-fetch('http://your-server:8080/api/v1/status')
+fetch('http://your-server:8080/api/v1/server/status')
   .then(response => response.json())
   .then(data => {
     if (data.success) {
@@ -489,7 +502,7 @@ fetch('http://your-server:8080/api/v1/status')
   });
 
 // 获取性能数据
-fetch('http://your-server:8080/api/v1/performance')
+fetch('http://your-server:8080/api/v1/server/performance')
   .then(response => response.json())
   .then(data => {
     if (data.success) {
@@ -516,12 +529,16 @@ if response.status_code == 200:
 ### cURL
 
 ```bash
+# 获取服务器状态
+curl -X GET "http://your-server:8080/api/v1/server/status" \
+     -H "Accept: application/json"
+
 # 获取世界信息
 curl -X GET "http://your-server:8080/api/v1/worlds/list" \
      -H "Accept: application/json"
 
 # 带认证的请求
-curl -X GET "http://your-server:8080/api/v1/performance" \
+curl -X GET "http://your-server:8080/api/v1/server/performance" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -H "Accept: application/json"
 ```
