@@ -1,0 +1,292 @@
+package com.xaoxiao.convenientaccess.database;
+
+import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * SQLite数据库管理器
+ * 负责数据库连接池管理、初始化、迁移和事务管理
+ */
+public class DatabaseManager {
+    private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
+    
+    private final ConvenientAccessPlugin plugin;
+    private final String databasePath;
+    private final ExecutorService executorService;
+    private final AtomicBoolean initialized = new AtomicBoolean(false);
+    
+    // 数据库版本
+    private static final int CURRENT_VERSION = 1;
+    
+    public DatabaseManager(ConvenientAccessPlugin plugin) {
+        this.plugin = plugin;
+        this.databasePath = plugin.getDataFolder().getAbsolutePath() + File.separator + "whitelist.db";
+        this.executorService = Executors.newFixedThreadPool(3, r -> {
+            Thread thread = new Thread(r, "DatabaseManager-Thread");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+    
+    /**
+     * 初始化数据库
+     */
+    public CompletableFuture<Boolean> initialize() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                // 确保数据文件夹存在
+                File dataFolder = plugin.getDataFolder();
+                if (!dataFolder.exists()) {
+                    dataFolder.mkdirs();
+                }
+                
+                // 创建数据库连接
+                try (Connection connection = getConnection()) {
+                    // 启用外键约束
+                    try (Statement stmt = connection.createStatement()) {
+                        stmt.execute("PRAGMA foreign_keys = ON");
+                        stmt.execute("PRAGMA journal_mode = WAL");
+                        stmt.execute("PRAGMA synchronous = NORMAL");
+                        stmt.execute("PRAGMA cache_size = 10000");
+                        stmt.execute("PRAGMA temp_store = MEMORY");
+                    }
+                    
+                    // 检查数据库版本
+                    int currentVersion = getDatabaseVersion(connection);
+                    if (currentVersion == 0) {
+                        // 新数据库，创建所有表
+                        createTables(connection);
+                        setDatabaseVersion(connection, CURRENT_VERSION);
+                        logger.info("数据库初始化完成，版本: {}", CURRENT_VERSION);
+                    } else if (currentVersion < CURRENT_VERSION) {
+                        // 需要升级
+                        migrateDatabaseFrom(connection, currentVersion);
+                        logger.info("数据库升级完成，从版本 {} 升级到 {}", currentVersion, CURRENT_VERSION);
+                    }
+                    
+                    initialized.set(true);
+                    return true;
+                }
+            } catch (Exception e) {
+                logger.error("数据库初始化失败", e);
+                return false;
+            }
+        }, executorService);
+    }
+    
+    /**
+     * 获取数据库连接
+     */
+    public Connection getConnection() throws SQLException {
+        return DriverManager.getConnection("jdbc:sqlite:" + databasePath);
+    }
+    
+    /**
+     * 异步执行数据库操作
+     */
+    public <T> CompletableFuture<T> executeAsync(DatabaseOperation<T> operation) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection connection = getConnection()) {
+                return operation.execute(connection);
+            } catch (Exception e) {
+                logger.error("数据库操作执行失败", e);
+                throw new RuntimeException(e);
+            }
+        }, executorService);
+    }
+    
+    /**
+     * 异步执行事务操作
+     */
+    public <T> CompletableFuture<T> executeTransactionAsync(DatabaseOperation<T> operation) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection connection = getConnection()) {
+                connection.setAutoCommit(false);
+                try {
+                    T result = operation.execute(connection);
+                    connection.commit();
+                    return result;
+                } catch (Exception e) {
+                    connection.rollback();
+                    throw e;
+                }
+            } catch (Exception e) {
+                logger.error("数据库事务执行失败", e);
+                throw new RuntimeException(e);
+            }
+        }, executorService);
+    }
+    
+    /**
+     * 创建所有数据库表
+     */
+    private void createTables(Connection connection) throws SQLException {
+        // 读取SQL脚本并执行
+        String[] sqlScripts = {
+            "schema/whitelist.sql",
+            "schema/sync_tasks.sql", 
+            "schema/operation_log.sql",
+            "schema/registration_tokens.sql",
+            "schema/admin_roles.sql",
+            "schema/admin_users.sql",
+            "schema/admin_sessions.sql",
+            "schema/auth_logs.sql",
+            "schema/admin_operation_logs.sql",
+            "schema/indexes.sql"
+        };
+        
+        for (String scriptPath : sqlScripts) {
+            executeScript(connection, scriptPath);
+        }
+        
+        // 插入初始数据
+        insertInitialData(connection);
+    }
+    
+    /**
+     * 执行SQL脚本
+     */
+    private void executeScript(Connection connection, String scriptPath) throws SQLException {
+        try (InputStream inputStream = getClass().getClassLoader().getResourceAsStream(scriptPath)) {
+            if (inputStream == null) {
+                logger.warn("SQL脚本文件不存在: {}", scriptPath);
+                return;
+            }
+            
+            String sql = new String(inputStream.readAllBytes());
+            String[] statements = sql.split(";");
+            
+            try (Statement stmt = connection.createStatement()) {
+                for (String statement : statements) {
+                    String trimmed = statement.trim();
+                    if (!trimmed.isEmpty() && !trimmed.startsWith("--")) {
+                        stmt.execute(trimmed);
+                    }
+                }
+            }
+            
+            logger.debug("执行SQL脚本: {}", scriptPath);
+        } catch (IOException e) {
+            logger.error("读取SQL脚本失败: {}", scriptPath, e);
+            throw new SQLException("读取SQL脚本失败", e);
+        }
+    }
+    
+    /**
+     * 插入初始数据
+     */
+    private void insertInitialData(Connection connection) throws SQLException {
+        // 插入默认角色
+        String insertRoles = """
+            INSERT OR IGNORE INTO admin_roles (role_name, display_name, permissions) VALUES
+            ('super_admin', '超级管理员', '["*"]'),
+            ('admin', '管理员', '["whitelist:*", "stats:read"]'),
+            ('operator', '操作员', '["whitelist:read", "whitelist:write"]'),
+            ('viewer', '查看者', '["whitelist:read", "stats:read"]')
+        """;
+        
+        try (Statement stmt = connection.createStatement()) {
+            stmt.execute(insertRoles);
+        }
+        
+        logger.debug("插入初始数据完成");
+    }
+    
+    /**
+     * 获取数据库版本
+     */
+    private int getDatabaseVersion(Connection connection) throws SQLException {
+        // 检查版本表是否存在
+        String checkTable = """
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='database_version'
+        """;
+        
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(checkTable)) {
+            
+            if (!rs.next()) {
+                // 版本表不存在，创建它
+                String createVersionTable = """
+                    CREATE TABLE database_version (
+                        version INTEGER PRIMARY KEY
+                    )
+                """;
+                stmt.execute(createVersionTable);
+                return 0;
+            }
+        }
+        
+        // 获取当前版本
+        String getVersion = "SELECT version FROM database_version LIMIT 1";
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(getVersion)) {
+            
+            if (rs.next()) {
+                return rs.getInt("version");
+            } else {
+                return 0;
+            }
+        }
+    }
+    
+    /**
+     * 设置数据库版本
+     */
+    private void setDatabaseVersion(Connection connection, int version) throws SQLException {
+        String sql = "INSERT OR REPLACE INTO database_version (version) VALUES (?)";
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setInt(1, version);
+            stmt.executeUpdate();
+        }
+    }
+    
+    /**
+     * 数据库迁移
+     */
+    private void migrateDatabaseFrom(Connection connection, int fromVersion) throws SQLException {
+        logger.info("开始数据库迁移，从版本 {} 到版本 {}", fromVersion, CURRENT_VERSION);
+        
+        for (int version = fromVersion; version < CURRENT_VERSION; version++) {
+            String migrationScript = "migrations/migrate_" + version + "_to_" + (version + 1) + ".sql";
+            executeScript(connection, migrationScript);
+            setDatabaseVersion(connection, version + 1);
+            logger.info("数据库迁移完成: {} -> {}", version, version + 1);
+        }
+    }
+    
+    /**
+     * 检查数据库是否已初始化
+     */
+    public boolean isInitialized() {
+        return initialized.get();
+    }
+    
+    /**
+     * 关闭数据库管理器
+     */
+    public void shutdown() {
+        executorService.shutdown();
+        logger.info("数据库管理器已关闭");
+    }
+    
+    /**
+     * 数据库操作接口
+     */
+    @FunctionalInterface
+    public interface DatabaseOperation<T> {
+        T execute(Connection connection) throws SQLException;
+    }
+}
