@@ -1,5 +1,9 @@
 package com.xaoxiao.convenientaccess;
 
+import org.bukkit.plugin.java.JavaPlugin;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.xaoxiao.convenientaccess.api.ApiManager;
 import com.xaoxiao.convenientaccess.cache.CacheManager;
 import com.xaoxiao.convenientaccess.command.ConvenientAccessCommand;
@@ -8,9 +12,6 @@ import com.xaoxiao.convenientaccess.data.DataCollector;
 import com.xaoxiao.convenientaccess.http.HttpServer;
 import com.xaoxiao.convenientaccess.integration.SparkIntegration;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistSystem;
-import org.bukkit.plugin.java.JavaPlugin;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class ConvenientAccessPlugin extends JavaPlugin {
     private static final Logger logger = LoggerFactory.getLogger(ConvenientAccessPlugin.class);
@@ -68,6 +69,13 @@ public class ConvenientAccessPlugin extends JavaPlugin {
             
             // 注册命令
             getCommand("convenientaccess").setExecutor(new ConvenientAccessCommand(this));
+            
+            // 注册白名单监听器
+            getServer().getPluginManager().registerEvents(
+                new com.xaoxiao.convenientaccess.listener.WhitelistListener(this), 
+                this
+            );
+            logger.info("白名单监听器已注册");
             
             logger.info("ConvenientAccess 插件启动完成！");
             

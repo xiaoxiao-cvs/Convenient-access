@@ -26,6 +26,12 @@ permissions:
   convenientaccess.whitelist.write:
     description: Allows modifying whitelist data
     default: op
+  convenientaccess.whitelist.notify:
+    description: Receives notifications when whitelisted players join
+    default: op
+  convenientaccess.whitelist.bypass:
+    description: Bypass whitelist restrictions
+    default: false
   convenientaccess.api.access:
     description: Allows access to ConvenientAccess API
     default: true

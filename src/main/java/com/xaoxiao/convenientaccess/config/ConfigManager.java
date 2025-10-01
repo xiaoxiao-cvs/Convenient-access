@@ -128,6 +128,50 @@ public class ConfigManager {
         return config.getInt("spark.timeout", 5000);
     }
     
+    // 白名单配置
+    public boolean isWhitelistEnabled() {
+        return config.getBoolean("whitelist.enabled", true);
+    }
+    
+    public boolean isWhitelistStrictMode() {
+        return config.getBoolean("whitelist.strict-mode", false);
+    }
+    
+    public String getWhitelistKickMessage() {
+        return config.getString("whitelist.kick-message", 
+            "&c您不在服务器白名单中！\n&7请联系管理员申请加入白名单");
+    }
+    
+    public String getContactInfo() {
+        return config.getString("whitelist.contact-info", "请联系管理员");
+    }
+    
+    public int getTokenExpiryHours() {
+        return config.getInt("whitelist.token-expiry-hours", 24);
+    }
+    
+    public boolean isAutoCleanupTokens() {
+        return config.getBoolean("whitelist.auto-cleanup-tokens", true);
+    }
+    
+    public boolean isJoinNotificationEnabled() {
+        return config.getBoolean("whitelist.join-notification.enabled", true);
+    }
+    
+    public String getJoinNotificationPermission() {
+        return config.getString("whitelist.join-notification.permission", 
+            "convenientaccess.whitelist.notify");
+    }
+    
+    public boolean isWelcomeMessageEnabled() {
+        return config.getBoolean("whitelist.welcome-message.enabled", true);
+    }
+    
+    public String getWelcomeMessage() {
+        return config.getString("whitelist.welcome-message.text", 
+            "&a欢迎回到服务器！\n&7玩家: &e{player}");
+    }
+    
     // 日志配置
     public boolean isLogRequests() {
         return config.getBoolean("logging.log-requests", false);
