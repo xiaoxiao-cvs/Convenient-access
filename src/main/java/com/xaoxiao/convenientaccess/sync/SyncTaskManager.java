@@ -1,15 +1,5 @@
 package com.xaoxiao.convenientaccess.sync;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
-import com.xaoxiao.convenientaccess.database.DatabaseManager;
-import com.xaoxiao.convenientaccess.whitelist.WhitelistEntry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -17,12 +7,32 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
+import com.xaoxiao.convenientaccess.database.DatabaseManager;
+import com.xaoxiao.convenientaccess.whitelist.WhitelistEntry;
 
 /**
  * 同步任务管理器（增强版）
@@ -340,8 +350,11 @@ public class SyncTaskManager {
      */
     public CompletableFuture<Long> scheduleAddPlayer(String uuid, String name) {
         JsonObject data = new JsonObject();
-        data.addProperty("uuid", uuid);
+        if (uuid != null && !uuid.trim().isEmpty()) {
+            data.addProperty("uuid", uuid);
+        }
         data.addProperty("name", name);
+        data.addProperty("uuid_pending", uuid == null || uuid.trim().isEmpty());
         return createTask(SyncTask.TaskType.ADD_PLAYER, data.toString(), 3);
     }
     
@@ -350,9 +363,21 @@ public class SyncTaskManager {
      */
     public CompletableFuture<Long> scheduleRemovePlayer(String uuid, String name) {
         JsonObject data = new JsonObject();
-        data.addProperty("uuid", uuid);
+        if (uuid != null && !uuid.trim().isEmpty()) {
+            data.addProperty("uuid", uuid);
+        }
         data.addProperty("name", name);
         return createTask(SyncTask.TaskType.REMOVE_PLAYER, data.toString(), 3);
+    }
+    
+    /**
+     * 调度UUID更新任务
+     */
+    public CompletableFuture<Long> scheduleUuidUpdate(String name, String uuid) {
+        JsonObject data = new JsonObject();
+        data.addProperty("name", name);
+        data.addProperty("uuid", uuid);
+        return createTask(SyncTask.TaskType.UPDATE_UUID, data.toString(), 3);
     }
     
     /**
@@ -436,6 +461,9 @@ public class SyncTaskManager {
                     break;
                 case REMOVE_PLAYER:
                     success = executeRemovePlayer(task.getData());
+                    break;
+                case UPDATE_UUID:
+                    success = executeUuidUpdate(task.getData());
                     break;
                 case BATCH_UPDATE:
                     success = executeBatchUpdate(task.getData());
@@ -573,6 +601,44 @@ public class SyncTaskManager {
         }
     }
     
+    /**
+     * 执行UUID更新同步
+     */
+    private boolean executeUuidUpdate(String data) {
+        try {
+            logger.debug("执行UUID更新同步: {}", data);
+            
+            JsonObject json = gson.fromJson(data, JsonObject.class);
+            String name = json.get("name").getAsString();
+            String uuid = json.get("uuid").getAsString();
+            
+            // 读取现有白名单
+            List<WhitelistEntry> entries = readWhitelistFromJson();
+            
+            // 查找并更新UUID
+            boolean updated = false;
+            for (WhitelistEntry entry : entries) {
+                if (entry.getName().equalsIgnoreCase(name) && 
+                    (entry.getUuid() == null || entry.getUuid().trim().isEmpty())) {
+                    entry.setUuid(uuid);
+                    updated = true;
+                    logger.info("JSON同步: 为玩家 {} 更新UUID: {}", name, uuid);
+                    break;
+                }
+            }
+            
+            if (updated) {
+                return writeWhitelistToJson(entries);
+            } else {
+                logger.warn("未找到需要更新UUID的玩家: {}", name);
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("执行UUID更新同步失败", e);
+            return false;
+        }
+    }
+
     /**
      * 执行批量更新同步
      */

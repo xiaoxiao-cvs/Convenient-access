@@ -220,6 +220,7 @@ public class SyncTask {
         FULL_SYNC("FULL_SYNC"),
         ADD_PLAYER("ADD_PLAYER"),
         REMOVE_PLAYER("REMOVE_PLAYER"),
+        UPDATE_UUID("UPDATE_UUID"),
         BATCH_UPDATE("BATCH_UPDATE");
         
         private final String value;

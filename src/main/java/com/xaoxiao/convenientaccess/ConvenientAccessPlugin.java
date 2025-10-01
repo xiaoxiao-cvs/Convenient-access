@@ -35,6 +35,9 @@ public class ConvenientAccessPlugin extends JavaPlugin {
             // 初始化配置管理器
             configManager = new ConfigManager(this);
             
+            // 自动生成管理员密码和API Token（仅首次启动）
+            initializeAuthConfig();
+            
             // 初始化现有组件
             cacheManager = new CacheManager(configManager);
             sparkIntegration = new SparkIntegration(this);
@@ -177,5 +180,75 @@ public class ConvenientAccessPlugin extends JavaPlugin {
             logger.error("插件重载失败", e);
             throw new RuntimeException("插件重载失败: " + e.getMessage());
         }
+    }
+    
+    /**
+     * 初始化认证配置（自动生成密码和Token）
+     */
+    private void initializeAuthConfig() {
+        boolean configChanged = false;
+        
+        // 检查并生成管理员密码
+        String adminPassword = configManager.getAdminPassword();
+        if (adminPassword == null || adminPassword.trim().isEmpty()) {
+            // 生成12位随机密码
+            String newPassword = generateRandomPassword(12);
+            configManager.setAdminPassword(newPassword);
+            configChanged = true;
+            logger.info("已自动生成管理员密码: {}", newPassword);
+            logger.warn("请妥善保管管理员密码，用于生成注册令牌等管理操作");
+        } else {
+            logger.info("使用配置文件中的管理员密码");
+        }
+        
+        // 检查并生成API Token
+        String apiToken = configManager.getApiToken();
+        if (apiToken == null || apiToken.trim().isEmpty()) {
+            // 生成64位API Token（sk-开头）
+            String newToken = generateApiToken();
+            configManager.setApiToken(newToken);
+            configChanged = true;
+            logger.info("已自动生成API访问令牌: {}", newToken);
+            logger.warn("请妥善保管API令牌，用于API访问认证");
+        } else {
+            logger.info("使用配置文件中的API令牌");
+        }
+        
+        if (configChanged) {
+            logger.info("认证配置已更新并保存到配置文件");
+        }
+    }
+    
+    /**
+     * 生成随机密码
+     */
+    private String generateRandomPassword(int length) {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        StringBuilder sb = new StringBuilder();
+        java.util.Random random = new java.util.Random();
+        
+        for (int i = 0; i < length; i++) {
+            sb.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        
+        return sb.toString();
+    }
+    
+    /**
+     * 生成API Token（sk-开头的64位token）
+     */
+    private String generateApiToken() {
+        String prefix = configManager.getTokenPrefix();
+        String tokenChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        StringBuilder sb = new StringBuilder(prefix);
+        java.util.Random random = new java.util.Random();
+        
+        // 生成64位token（包含前缀）
+        int tokenLength = 64 - prefix.length();
+        for (int i = 0; i < tokenLength; i++) {
+            sb.append(tokenChars.charAt(random.nextInt(tokenChars.length())));
+        }
+        
+        return sb.toString();
     }
 }

@@ -17,12 +17,16 @@ http:
 api:
   # API版本
   version: "v1"
-  # 简化认证配置
+  # 认证配置
   auth:
-    # 管理员密码（首次启动时自动生成）
+    # 是否启用API鉴权（建议生产环境开启）
+    enabled: true
+    # 管理员密码（首次启动时自动生成，设置后保持不变）
     admin-password: ""
-    # 默认API Token（用于测试）
-    default-token: "test_token_123456"
+    # API访问令牌（首次启动时自动生成sk-开头的64位token）
+    api-token: ""
+    # 令牌前缀（不建议修改）
+    token-prefix: "sk-"
   # 请求频率限制 (每分钟最大请求数)
   rate-limit:
     enabled: false

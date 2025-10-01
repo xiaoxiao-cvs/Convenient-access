@@ -1,16 +1,21 @@
 package com.xaoxiao.convenientaccess.whitelist;
 
-import com.xaoxiao.convenientaccess.database.DatabaseManager;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.sql.*;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.xaoxiao.convenientaccess.database.DatabaseManager;
 
 /**
  * 白名单管理器
@@ -47,6 +52,88 @@ public class WhitelistManager {
      */
     public CompletableFuture<Boolean> addPlayer(String name, String uuid, String addedByName, String addedByUuid, WhitelistEntry.Source source) {
         return addPlayer(name, uuid, addedByName, addedByUuid, source, LocalDateTime.now());
+    }
+    
+    /**
+     * 添加玩家到白名单（只需用户名，UUID留空待后续补充）
+     */
+    public CompletableFuture<Boolean> addPlayerByNameOnly(String name, String addedByName, String addedByUuid, WhitelistEntry.Source source) {
+        return addPlayerByNameOnly(name, addedByName, addedByUuid, source, LocalDateTime.now());
+    }
+    
+    /**
+     * 添加玩家到白名单（只需用户名，支持自定义时间戳）
+     */
+    public CompletableFuture<Boolean> addPlayerByNameOnly(String name, String addedByName, String addedByUuid, WhitelistEntry.Source source, LocalDateTime addedAt) {
+        // 参数验证
+        if (!isValidPlayerName(name)) {
+            logger.warn("无效的玩家名: {}", name);
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        // 先检查是否已存在该玩家名
+        return isPlayerWhitelistedByName(name).thenCompose(exists -> {
+            if (exists) {
+                logger.info("玩家 {} 已在白名单中", name);
+                return CompletableFuture.completedFuture(false);
+            }
+            
+            // UUID留空，等玩家登录时补充
+            WhitelistEntry entry = new WhitelistEntry(name, null, addedByName, addedByUuid, source.getValue(), addedAt);
+            
+            return databaseManager.executeTransactionAsync(connection -> {
+                String sql = """
+                    INSERT INTO whitelist (name, uuid, added_by_name, added_by_uuid, added_at, source, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """;
+                
+                try (PreparedStatement stmt = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                    stmt.setString(1, entry.getName());
+                    stmt.setString(2, entry.getUuid()); // null
+                    stmt.setString(3, entry.getAddedByName());
+                    stmt.setString(4, entry.getAddedByUuid());
+                    stmt.setTimestamp(5, Timestamp.valueOf(entry.getAddedAt()));
+                    stmt.setString(6, entry.getSource());
+                    stmt.setBoolean(7, entry.isActive());
+                    
+                    int affected = stmt.executeUpdate();
+                    if (affected > 0) {
+                        try (ResultSet rs = stmt.getGeneratedKeys()) {
+                            if (rs.next()) {
+                                entry.setId(rs.getLong(1));
+                            }
+                        }
+                        
+                        // 缓存使用玩家名作为key（因为UUID为空）
+                        cache.put("name:" + name.toLowerCase(), entry);
+                        logger.info("添加玩家到白名单（仅用户名）: {}", name);
+                        return true;
+                    }
+                    return false;
+                }
+            }).exceptionally(throwable -> {
+                logger.error("添加玩家到白名单失败: {}", name, throwable);
+                return false;
+            });
+        });
+    }
+    
+    /**
+     * 添加玩家到白名单（离线模式 - 只需用户名，UUID可为空）
+     * @deprecated 使用 addPlayerByNameOnly 替代
+     */
+    @Deprecated
+    public CompletableFuture<Boolean> addPlayerOffline(String name, String addedByName, String addedByUuid, WhitelistEntry.Source source) {
+        return addPlayerByNameOnly(name, addedByName, addedByUuid, source);
+    }
+    
+    /**
+     * 生成离线模式UUID（基于玩家名）
+     */
+    private String generateOfflineUuid(String playerName) {
+        // 使用 Minecraft 离线模式的 UUID 生成算法
+        java.util.UUID uuid = java.util.UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return uuid.toString();
     }
     
     /**
@@ -159,6 +246,84 @@ public class WhitelistManager {
     }
     
     /**
+     * 通过玩家名检查是否在白名单中
+     */
+    public CompletableFuture<Boolean> isPlayerWhitelistedByName(String playerName) {
+        if (playerName == null || playerName.trim().isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        String normalizedName = playerName.trim().toLowerCase();
+        
+        // 先检查缓存（检查基于名称的缓存）
+        if (cacheLoaded && cache.containsKey("name:" + normalizedName)) {
+            WhitelistEntry entry = cache.get("name:" + normalizedName);
+            return CompletableFuture.completedFuture(entry != null && entry.isActive());
+        }
+        
+        // 查询数据库
+        return databaseManager.executeAsync(connection -> {
+            String sql = "SELECT is_active FROM whitelist WHERE LOWER(name) = ? AND is_active = 1";
+            
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setString(1, normalizedName);
+                
+                try (ResultSet rs = stmt.executeQuery()) {
+                    return rs.next();
+                }
+            }
+        }).exceptionally(throwable -> {
+            logger.error("检查玩家白名单状态失败（按名称）: {}", playerName, throwable);
+            return false;
+        });
+    }
+
+    /**
+     * 检查玩家是否在白名单中（离线模式 - 同时检查用户名和UUID）
+     */
+    public CompletableFuture<Boolean> isPlayerWhitelistedOffline(String playerName, String uuid) {
+        if (playerName == null || playerName.trim().isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        // 先检查 UUID（如果有效）
+        if (isValidUuid(uuid)) {
+            if (cacheLoaded && cache.containsKey(uuid)) {
+                WhitelistEntry entry = cache.get(uuid);
+                if (entry != null && entry.isActive()) {
+                    return CompletableFuture.completedFuture(true);
+                }
+            }
+        }
+        
+        // 查询数据库 - 同时检查用户名和UUID
+        return databaseManager.executeAsync(connection -> {
+            String sql = """
+                SELECT is_active FROM whitelist 
+                WHERE (LOWER(name) = LOWER(?) OR uuid = ?) 
+                AND is_active = 1
+                LIMIT 1
+            """;
+            
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setString(1, playerName.trim());
+                stmt.setString(2, uuid);
+                
+                try (ResultSet rs = stmt.executeQuery()) {
+                    boolean found = rs.next();
+                    if (found) {
+                        logger.info("离线模式白名单匹配: 玩家 {} (UUID: {}) 已在白名单中", playerName, uuid);
+                    }
+                    return found;
+                }
+            }
+        }).exceptionally(throwable -> {
+            logger.error("检查离线模式玩家白名单状态失败: {} ({})", playerName, uuid, throwable);
+            return false;
+        });
+    }
+    
+    /**
      * 根据UUID获取白名单条目
      */
     public CompletableFuture<Optional<WhitelistEntry>> getPlayerByUuid(String uuid) {
@@ -230,6 +395,89 @@ public class WhitelistManager {
         });
     }
     
+    /**
+     * 更新玩家UUID（当玩家首次登录时）
+     */
+    public CompletableFuture<Boolean> updatePlayerUuid(String playerName, String uuid) {
+        if (!isValidPlayerName(playerName) || !isValidUuid(uuid)) {
+            logger.warn("无效的玩家名或UUID: name={}, uuid={}", playerName, uuid);
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        return databaseManager.executeTransactionAsync(connection -> {
+            String sql = "UPDATE whitelist SET uuid = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(name) = ? AND uuid IS NULL";
+            
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setString(1, uuid);
+                stmt.setString(2, playerName.toLowerCase());
+                
+                int affected = stmt.executeUpdate();
+                if (affected > 0) {
+                    // 更新缓存
+                    String nameKey = "name:" + playerName.toLowerCase();
+                    WhitelistEntry entry = cache.get(nameKey);
+                    if (entry != null) {
+                        entry.setUuid(uuid);
+                        // 添加基于UUID的缓存
+                        cache.put(uuid, entry);
+                        // 可以选择保留基于名称的缓存或移除
+                        // cache.remove(nameKey);
+                    }
+                    
+                    logger.info("更新玩家UUID: {} -> {}", playerName, uuid);
+                    return true;
+                }
+                return false;
+            }
+        }).exceptionally(throwable -> {
+            logger.error("更新玩家UUID失败: {} -> {}", playerName, uuid, throwable);
+            return false;
+        });
+    }
+    
+    /**
+     * 根据玩家名获取白名单条目
+     */
+    public CompletableFuture<Optional<WhitelistEntry>> getPlayerByName(String playerName) {
+        if (!isValidPlayerName(playerName)) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        
+        String normalizedName = playerName.toLowerCase();
+        
+        // 先检查缓存
+        if (cacheLoaded && cache.containsKey("name:" + normalizedName)) {
+            return CompletableFuture.completedFuture(Optional.ofNullable(cache.get("name:" + normalizedName)));
+        }
+        
+        // 查询数据库
+        return databaseManager.executeAsync(connection -> {
+            String sql = "SELECT * FROM whitelist WHERE LOWER(name) = ?";
+            
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setString(1, normalizedName);
+                
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        WhitelistEntry entry = mapResultSetToEntry(rs);
+                        // 更新缓存
+                        if (cacheLoaded) {
+                            cache.put("name:" + normalizedName, entry);
+                            if (entry.getUuid() != null) {
+                                cache.put(entry.getUuid(), entry);
+                            }
+                        }
+                        return Optional.of(entry);
+                    }
+                    return Optional.<WhitelistEntry>empty();
+                }
+            }
+        }).exceptionally(throwable -> {
+            logger.error("根据玩家名获取白名单条目失败: {}", playerName, throwable);
+            return Optional.<WhitelistEntry>empty();
+        });
+    }
+
     /**
      * 获取白名单统计信息
      */

@@ -75,7 +75,9 @@ public class WhitelistListener implements Listener {
             
             // 异步检查玩家是否在白名单中
             logger.info("开始检查玩家白名单状态...");
-            CompletableFuture<Boolean> whitelistCheck = whitelistManager.isPlayerWhitelisted(playerUuid);
+            
+            // 使用离线模式检查（同时检查用户名和UUID）
+            CompletableFuture<Boolean> whitelistCheck = whitelistManager.isPlayerWhitelistedOffline(playerName, playerUuid);
             
             // 等待结果（设置合理的超时时间）
             Boolean isWhitelisted = whitelistCheck.get(5, TimeUnit.SECONDS);
@@ -120,30 +122,83 @@ public class WhitelistListener implements Listener {
     
     /**
      * 处理玩家加入事件
-     * 发送欢迎消息给白名单玩家
+     * 发送欢迎消息给白名单玩家，并补充UUID（如果缺失）
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
+        String playerName = player.getName();
         String playerUuid = player.getUniqueId().toString();
         
-        // 异步检查玩家信息并发送消息
-        whitelistManager.getPlayerByUuid(playerUuid).thenAccept(entryOpt -> {
-            if (entryOpt.isPresent()) {
-                // 向管理员发送玩家加入通知
-                if (plugin.getConfigManager().isJoinNotificationEnabled()) {
-                    sendJoinNotificationToAdmins(player, entryOpt.get());
-                }
-                
-                // 向玩家发送自定义欢迎消息
-                if (plugin.getConfigManager().isWelcomeMessageEnabled()) {
-                    sendWelcomeMessage(player);
-                }
+        logger.info("玩家 {} ({}) 加入服务器", playerName, playerUuid);
+        
+        // 先尝试通过UUID查找
+        whitelistManager.getPlayerByUuid(playerUuid).thenCompose(uuidEntry -> {
+            if (uuidEntry.isPresent()) {
+                // 通过UUID找到了，正常处理
+                logger.debug("通过UUID找到白名单条目: {}", playerName);
+                handlePlayerJoinNotifications(player, uuidEntry.get());
+                return CompletableFuture.completedFuture(null);
             }
+            
+            // 通过UUID没找到，尝试通过玩家名查找（可能UUID为空）
+            return whitelistManager.getPlayerByName(playerName).thenCompose(nameEntry -> {
+                if (nameEntry.isPresent()) {
+                    com.xaoxiao.convenientaccess.whitelist.WhitelistEntry entry = nameEntry.get();
+                    if (entry.getUuid() == null || entry.getUuid().trim().isEmpty()) {
+                        // 找到了基于名称的条目但UUID为空，需要补充UUID
+                        logger.info("为玩家 {} 补充UUID: {}", playerName, playerUuid);
+                        return whitelistManager.updatePlayerUuid(playerName, playerUuid).thenAccept(success -> {
+                            if (success) {
+                                logger.info("✅ 成功为玩家 {} 补充UUID: {}", playerName, playerUuid);
+                                
+                                // 创建UUID更新同步任务
+                                plugin.getWhitelistSystem().getSyncTaskManager().scheduleUuidUpdate(playerName, playerUuid)
+                                    .thenAccept(taskId -> logger.debug("UUID更新同步任务已创建: {}", taskId))
+                                    .exceptionally(throwable -> {
+                                        logger.warn("创建UUID更新同步任务失败", throwable);
+                                        return null;
+                                    });
+                                
+                                // 发送通知消息
+                                handlePlayerJoinNotifications(player, entry);
+                                // 向玩家发送UUID补充成功的消息
+                                player.sendMessage(ChatColor.GREEN + "欢迎回来！您的玩家信息已更新。");
+                            } else {
+                                logger.warn("❌ 为玩家 {} 补充UUID失败", playerName);
+                            }
+                        });
+                    } else {
+                        // UUID不为空但不匹配，可能是重名玩家？
+                        logger.warn("⚠️ 发现同名玩家但UUID不匹配: {} (数据库UUID: {}, 当前UUID: {})", 
+                                  playerName, entry.getUuid(), playerUuid);
+                        handlePlayerJoinNotifications(player, entry);
+                    }
+                } else {
+                    // 名称也没找到，说明玩家不在白名单中（但能进入说明白名单检查通过了）
+                    logger.debug("玩家 {} 不在白名单中或白名单功能已禁用", playerName);
+                }
+                return CompletableFuture.completedFuture(null);
+            });
         }).exceptionally(throwable -> {
-            logger.error("处理玩家加入事件时发生错误: {}", player.getName(), throwable);
+            logger.error("处理玩家加入事件时发生错误: {}", playerName, throwable);
             return null;
         });
+    }
+    
+    /**
+     * 处理玩家加入通知（提取的公共方法）
+     */
+    private void handlePlayerJoinNotifications(Player player, com.xaoxiao.convenientaccess.whitelist.WhitelistEntry entry) {
+        // 向管理员发送玩家加入通知
+        if (plugin.getConfigManager().isJoinNotificationEnabled()) {
+            sendJoinNotificationToAdmins(player, entry);
+        }
+        
+        // 向玩家发送自定义欢迎消息
+        if (plugin.getConfigManager().isWelcomeMessageEnabled()) {
+            sendWelcomeMessage(player);
+        }
     }
     
     /**

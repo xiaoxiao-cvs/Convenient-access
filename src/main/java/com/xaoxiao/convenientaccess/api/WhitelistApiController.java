@@ -1,5 +1,15 @@
 package com.xaoxiao.convenientaccess.api;
 
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -10,23 +20,13 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import com.xaoxiao.convenientaccess.sync.SyncTask;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
-import com.xaoxiao.convenientaccess.whitelist.BatchOperation;
 import com.xaoxiao.convenientaccess.utils.UuidUtils;
+import com.xaoxiao.convenientaccess.whitelist.BatchOperation;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistEntry;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistManager;
-import com.xaoxiao.convenientaccess.whitelist.WhitelistStats;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * 白名单API控制器
@@ -113,16 +113,15 @@ public class WhitelistApiController {
             String requestBody = readRequestBody(request);
             JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
             
-            // 参数验证 - 要求name、added_by_name、added_by_uuid、source，uuid变为可选
-            if (!json.has("name") || !json.has("added_by_name") || !json.has("added_by_uuid") || !json.has("source")) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: name, added_by_name, added_by_uuid, source"));
+            // 参数验证 - 只需要name、source，其他为可选
+            if (!json.has("name") || !json.has("source")) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: name, source"));
                 return;
             }
             
             String name = json.get("name").getAsString();
-            String providedUuid = json.has("uuid") ? json.get("uuid").getAsString() : null;
-            String addedByName = json.get("added_by_name").getAsString();
-            String addedByUuid = json.get("added_by_uuid").getAsString();
+            String addedByName = json.has("added_by_name") ? json.get("added_by_name").getAsString() : "API";
+            String addedByUuid = json.has("added_by_uuid") ? json.get("added_by_uuid").getAsString() : "00000000-0000-0000-0000-000000000000";
             String sourceStr = json.get("source").getAsString();
             
             // 处理时间戳 - 如果前端提供则使用，否则使用当前时间
@@ -145,15 +144,6 @@ public class WhitelistApiController {
                 return;
             }
             
-            // 生成或验证UUID
-            String uuid;
-            try {
-                uuid = UuidUtils.getOrGenerateUuid(name, providedUuid);
-            } catch (IllegalArgumentException e) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名不能为空"));
-                return;
-            }
-            
             WhitelistEntry.Source source;
             try {
                 source = WhitelistEntry.Source.fromString(sourceStr);
@@ -162,26 +152,30 @@ public class WhitelistApiController {
                 return;
             }
             
-            // 添加玩家
-            whitelistManager.addPlayer(name, uuid, addedByName, addedByUuid, source, addedAt)
-                .thenAccept(success -> {
+            // 新逻辑：只使用玩家名添加到白名单，UUID留空等玩家登录时补充
+            logger.info("添加玩家到白名单（仅用户名）: {}", name);
+            
+            CompletableFuture<Boolean> addFuture = whitelistManager.addPlayerByNameOnly(name, addedByName, addedByUuid, source, addedAt);
+            
+            // 处理添加结果
+            addFuture.thenAccept(success -> {
                     if (success) {
-                        // 创建同步任务
-                        syncTaskManager.scheduleAddPlayer(uuid, name);
+                        // 创建同步任务（使用玩家名）
+                        syncTaskManager.scheduleAddPlayer(null, name);
                         
                         JsonObject result = new JsonObject();
-                        result.addProperty("uuid", uuid);
                         result.addProperty("name", name);
                         result.addProperty("added", true);
-                        result.addProperty("uuid_generated", providedUuid == null || providedUuid.trim().isEmpty());
+                        result.addProperty("uuid_pending", true); // 表示UUID将在玩家登录时补充
+                        result.addProperty("message", "玩家已添加到白名单，UUID将在首次登录时自动补充");
                         
                         sendJsonResponse(response, 201, ApiResponse.success(result, "玩家添加成功"));
                     } else {
-                        sendJsonResponse(response, 400, ApiResponse.badRequest("添加玩家失败，可能已存在"));
+                        sendJsonResponse(response, 409, ApiResponse.error("玩家已在白名单中或添加失败"));
                     }
                 })
                 .exceptionally(throwable -> {
-                    logger.error("添加玩家失败: {} ({})", name, uuid, throwable);
+                    logger.error("添加玩家失败: {}", name, throwable);
                     sendJsonResponse(response, 500, ApiResponse.error("添加玩家失败"));
                     return null;
                 })

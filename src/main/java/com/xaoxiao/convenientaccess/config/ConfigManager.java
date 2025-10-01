@@ -63,12 +63,33 @@ public class ConfigManager {
         return config.getString("api.version", "v1");
     }
     
+    /**
+     * 是否启用API鉴权
+     */
     public boolean isAuthEnabled() {
-        return config.getBoolean("api.auth.enabled", false);
+        return config.getBoolean("api.auth.enabled", true);
     }
     
-    public String getApiKey() {
-        return config.getString("api.auth.api-key", "");
+    /**
+     * 获取API访问令牌
+     */
+    public String getApiToken() {
+        return config.getString("api.auth.api-token", "");
+    }
+    
+    /**
+     * 设置API访问令牌到配置文件
+     */
+    public void setApiToken(String token) {
+        config.set("api.auth.api-token", token);
+        plugin.saveConfig();
+    }
+    
+    /**
+     * 获取令牌前缀
+     */
+    public String getTokenPrefix() {
+        return config.getString("api.auth.token-prefix", "sk-");
     }
     
     /**

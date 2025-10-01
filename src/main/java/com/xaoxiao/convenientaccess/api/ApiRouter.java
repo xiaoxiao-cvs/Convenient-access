@@ -5,6 +5,8 @@ import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.xaoxiao.convenientaccess.config.ConfigManager;
+
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,10 +21,80 @@ public class ApiRouter extends HttpServlet {
     
     private final WhitelistApiController whitelistController;
     private final UserApiController userController;
+    private final ConfigManager configManager;
     
-    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController) {
+    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController, ConfigManager configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
+        this.configManager = configManager;
+    }
+    
+    /**
+     * 验证API请求的认证
+     */
+    private boolean isAuthenticated(HttpServletRequest request, String path) {
+        // 如果认证被禁用，直接通过
+        if (!configManager.isAuthEnabled()) {
+            return true;
+        }
+        
+        // 公开的端点不需要认证
+        if (isPublicEndpoint(path)) {
+            return true;
+        }
+        
+        // 检查API Token
+        String apiKey = request.getHeader("X-API-Key");
+        if (apiKey == null) {
+            apiKey = request.getHeader("Authorization");
+            if (apiKey != null && apiKey.startsWith("Bearer ")) {
+                apiKey = apiKey.substring(7);
+            }
+        }
+        
+        if (apiKey != null) {
+            String validToken = configManager.getApiToken();
+            if (validToken != null && validToken.equals(apiKey)) {
+                return true;
+            }
+        }
+        
+        // 对于管理员端点，检查管理员密码
+        if (isAdminEndpoint(path)) {
+            String adminPassword = request.getHeader("X-Admin-Password");
+            if (adminPassword != null) {
+                String validPassword = configManager.getAdminPassword();
+                return validPassword != null && validPassword.equals(adminPassword);
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 判断是否为公开端点（不需要认证）
+     */
+    private boolean isPublicEndpoint(String path) {
+        return path.equals("/api/v1/register") || 
+               path.equals("/api/v1/admin/generate-token");
+    }
+    
+    /**
+     * 判断是否为管理员端点
+     */
+    private boolean isAdminEndpoint(String path) {
+        return path.startsWith("/api/v1/admin/");
+    }
+    
+    /**
+     * 发送认证失败响应
+     */
+    private void sendAuthFailedResponse(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        response.getWriter().write("{\"success\":false,\"error\":\"Unauthorized: Invalid API key or admin password\"}");
+        response.getWriter().flush();
     }
     
     @Override
@@ -50,6 +122,12 @@ public class ApiRouter extends HttpServlet {
         }
         
         logger.debug("GET request to: {}", path);
+        
+        // 检查认证
+        if (!isAuthenticated(request, path)) {
+            sendAuthFailedResponse(response);
+            return;
+        }
         
         try {
             // 白名单相关路由
@@ -82,6 +160,12 @@ public class ApiRouter extends HttpServlet {
         }
         
         logger.debug("POST request to: {}", path);
+        
+        // 检查认证
+        if (!isAuthenticated(request, path)) {
+            sendAuthFailedResponse(response);
+            return;
+        }
         
         try {
             // 白名单相关路由
@@ -124,6 +208,12 @@ public class ApiRouter extends HttpServlet {
         
         logger.debug("DELETE request to: {}", path);
         
+        // 检查认证
+        if (!isAuthenticated(request, path)) {
+            sendAuthFailedResponse(response);
+            return;
+        }
+        
         try {
              // 白名单删除路由
              if (path.startsWith("/api/v1/whitelist/")) {
@@ -145,7 +235,7 @@ public class ApiRouter extends HttpServlet {
         // 设置CORS头
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Password");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Admin-Password");
         response.setHeader("Access-Control-Max-Age", "3600");
         response.setStatus(HttpServletResponse.SC_OK);
     }

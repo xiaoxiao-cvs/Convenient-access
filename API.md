@@ -1,47 +1,188 @@
 # ConvenientAccess API 文档
 
+> 🎉 **v0.5.0 重大更新**：基于 WhitelistPlus 设计理念重构！现在添加白名单**只需玩家名**，UUID会在首次登录时自动补充！
+
+## 🌟 新特性亮点
+
+- ✨ **简化API**：添加白名单只需 `name` 和 `source` 两个参数
+- 🔄 **智能UUID补充**：玩家登录时自动补充UUID，无需手动获取
+- 🎮 **完美兼容**：支持离线和正版服务器，适应各种环境
+- 📊 **增强统计**：新增UUID待补充状态、来源分解等详细统计
+- 🔧 **批量操作**：支持批量添加/删除，提高管理效率
+- 🔐 **安全认证**：可配置的API认证系统，支持自动生成的API令牌
+
 ## 概述
 
-ConvenientAccess 提供了一套简洁的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。所有 API 端点都返回 JSON 格式的数据，专注于核心功能和服务器监控。
+ConvenientAccess 提供了一套简洁的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。基于 WhitelistPlus 设计理念，极大简化了白名单管理流程。所有 API 端点都返回 JSON 格式的数据，专注于核心功能和服务器监控。
 
 ## 基础信息
 
 - **基础URL**: `http://your-server:22222/api/v1`
 - **内容类型**: `application/json`
 - **字符编码**: `UTF-8`
-- **认证方式**: 简化认证（管理员直接操作）
+- **认证方式**: API Token 或 管理员密码认证
 - **频率限制**: 无特殊限制（适合管理员使用）
+
+## 🔐 认证系统
+
+### 认证配置
+
+插件支持可配置的认证系统，默认启用认证功能：
+
+```yaml
+# config.yml
+auth:
+  enabled: true  # 是否启用认证（默认：true）
+api-token: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # 64位API令牌
+token-prefix: "sk-"  # 令牌前缀
+admin-password: "xxxxxxxxxxxx"  # 12位管理员密码
+```
+
+### 认证方式
+
+#### 1. API Token 认证（推荐）
+
+使用 `X-API-Key` 头或 `Authorization` 头：
+
+```bash
+# 方式1：使用 X-API-Key 头
+curl -H "X-API-Key: sk-your-api-token-here" \
+     -X GET http://your-server:22222/api/v1/whitelist
+
+# 方式2：使用 Authorization Bearer
+curl -H "Authorization: Bearer sk-your-api-token-here" \
+     -X GET http://your-server:22222/api/v1/whitelist
+```
+
+#### 2. 管理员密码认证
+
+使用 `X-Admin-Password` 头（主要用于管理员端点）：
+
+```bash
+curl -H "X-Admin-Password: your-admin-password" \
+     -X POST http://your-server:22222/api/v1/admin/generate-token
+```
+
+### 公开端点
+
+以下端点无需认证（如果认证被禁用，所有端点都无需认证）：
+- `/api/v1/register` - 用户注册
+- `/api/v1/admin/generate-token` - 生成注册令牌
+
+### 自动生成凭证
+
+插件首次启动时会自动生成：
+- **管理员密码**：12位随机字符串
+- **API令牌**：64位 sk- 开头的随机字符串
+
+生成的凭证会自动保存到配置文件中，并在控制台输出供管理员记录。
+
+### 安全建议
+
+⚠️ **重要安全提示：**
+- 请妥善保管API令牌和管理员密码
+- 定期更换API令牌，避免长期使用同一令牌
+- 在生产环境中，建议启用认证功能
+- 如果不需要认证，可以在配置文件中设置 `auth.enabled: false`
+- 确保服务器防火墙正确配置，避免未授权访问
+
+### 禁用认证
+
+如果您不需要API认证（如内网环境），可以在 `config.yml` 中禁用：
+
+```yaml
+auth:
+  enabled: false  # 禁用认证
+```
+
+**注意：** 禁用认证后，所有API端点都可以无限制访问，请谨慎使用。
 
 ## 🚀 所有可用端点
 
 ### 白名单管理 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | 无 |
-| `/api/v1/whitelist` | POST | 添加白名单条目 | 无 |
-| `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | 无 |
-| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | 无 |
-| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | 无 |
-| `/api/v1/whitelist/sync` | POST | 手动触发同步 | 无 |
-| `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | 无 |
+| `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | API Token |
+| `/api/v1/whitelist` | POST | 添加白名单条目 | API Token |
+| `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | API Token |
+| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | API Token |
+| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | API Token |
+| `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Token |
+| `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | API Token |
 
 ### 用户注册 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/register` | POST | 用户注册（使用注册令牌） | 无 |
-| `/api/v1/admin/generate-token` | POST | 生成注册令牌 | 管理员密码 |
+| `/api/v1/register` | POST | 用户注册（使用注册令牌） | 无（公开） |
+| `/api/v1/admin/generate-token` | POST | 生成注册令牌 | 无（公开）* |
+
+*注：虽然是公开端点，但需要管理员密码验证
 
 ### 服务器监控 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/server/info` | GET | 获取服务器详细信息 | 无 |
-| `/api/v1/server/status` | GET | 获取服务器状态信息 | 无 |
-| `/api/v1/server/performance` | GET | 获取服务器性能数据 | 无 |
-| `/api/v1/players/online` | GET | 获取在线玩家数量 | 无 |
+| `/api/v1/server/info` | GET | 获取服务器详细信息 | API Token |
+| `/api/v1/server/status` | GET | 获取服务器状态信息 | API Token |
+| `/api/v1/server/performance` | GET | 获取服务器性能数据 | API Token |
+| `/api/v1/players/online` | GET | 获取在线玩家数量 | API Token |
 | `/api/v1/players/list` | GET | 获取详细玩家列表 | 无 |
 | `/api/v1/worlds/list` | GET | 获取世界列表 | 无 |
 | `/api/v1/system/resources` | GET | 获取系统资源信息 | 无 |
 | `/api/v1/health` | GET | 健康检查端点 | 无 |
+
+## 🎯 UUID自动补充机制
+
+### 设计理念
+
+基于 WhitelistPlus 插件的设计理念，我们的白名单系统采用了**"玩家名优先，UUID后补"**的策略：
+
+1. **添加阶段**：管理员只需提供玩家名即可添加白名单
+2. **登录阶段**：玩家首次登录时系统自动补充UUID  
+3. **同步阶段**：创建同步任务更新JSON文件，保持数据一致性
+
+### 工作流程
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant API as API接口
+    participant DB as 数据库
+    participant Player as 玩家
+    participant Listener as 登录监听器
+    participant Sync as 同步系统
+
+    Admin->>API: POST /api/v1/whitelist {"name": "PlayerName"}
+    API->>DB: INSERT (name, uuid=NULL)
+    API->>Admin: 返回成功响应
+
+    Player->>Listener: 玩家登录服务器
+    Listener->>DB: 查询玩家名对应记录
+    Listener->>DB: UPDATE uuid WHERE name=PlayerName
+    Listener->>Sync: 创建UUID更新任务
+    Listener->>Player: 发送欢迎消息
+```
+
+### 数据库状态变化
+
+**添加时：**
+```sql
+id | name       | uuid | source | is_active | uuid_pending
+1  | PlayerName | NULL | API    | 1         | true
+```
+
+**首次登录后：**
+```sql  
+id | name       | uuid                                 | source | is_active | uuid_pending
+1  | PlayerName | 550e8400-e29b-41d4-a716-446655440000 | API    | 1         | false
+```
+
+### 优势
+
+- ✅ **简化管理**：无需获取玩家UUID，直接使用玩家名
+- ✅ **兼容性强**：支持离线和正版服务器
+- ✅ **自动化**：UUID自动补充，无需人工干预
+- ✅ **数据完整性**：保证最终数据的完整性
+- ✅ **实用性**：符合大多数服务器的实际使用场景
 
 ## 简化认证机制
 
@@ -108,12 +249,29 @@ X-Admin-Password: your-admin-password
   "data": {
     "entries": [
       {
+        "id": 1,
         "uuid": "550e8400-e29b-41d4-a716-446655440000",
         "name": "Player1",
-        "created_at": "2024-01-01T00:00:00Z",
-        "updated_at": "2024-01-01T00:00:00Z",
-        "source": "manual",
-        "notes": "op"
+        "added_by_name": "AdminUser",
+        "added_by_uuid": "admin-uuid-here",
+        "added_at": "2024-01-01T00:00:00",
+        "source": "API",
+        "is_active": true,
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00"
+      },
+      {
+        "id": 2,
+        "uuid": null,
+        "name": "Player2",
+        "added_by_name": "AdminUser", 
+        "added_by_uuid": "admin-uuid-here",
+        "added_at": "2024-01-01T01:00:00",
+        "source": "API",
+        "is_active": true,
+        "created_at": "2024-01-01T01:00:00",
+        "updated_at": "2024-01-01T01:00:00",
+        "uuid_pending": true
       }
     ],
     "pagination": {
@@ -127,16 +285,37 @@ X-Admin-Password: your-admin-password
 }
 ```
 
+> **💡 说明**：当 `uuid` 字段为 `null` 且 `uuid_pending` 为 `true` 时，表示该玩家的UUID将在首次登录时自动补充。
+
 #### `POST /api/v1/whitelist`
 
-添加新的白名单条目。
+添加新的白名单条目（基于WhitelistPlus设计理念）。
+
+> **🎯 新特性**：现在只需要玩家名即可添加白名单，UUID会在玩家首次登录时自动补充！
 
 **请求体：**
 ```json
 {
-  "uuid": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "Player1",
-  "notes": "VIP玩家"
+  "name": "PlayerName",
+  "source": "API",
+  "added_by_name": "AdminName",
+  "added_by_uuid": "admin-uuid-here",
+  "added_at": "2024-01-01T12:00:00"
+}
+```
+
+**参数说明：**
+- `name` (必需): 玩家名称
+- `source` (必需): 添加来源，可选值：`PLAYER`、`ADMIN`、`SYSTEM`、`API`
+- `added_by_name` (可选): 添加者名称，默认为 "API"
+- `added_by_uuid` (可选): 添加者UUID，默认为 "00000000-0000-0000-0000-000000000000"
+- `added_at` (可选): 添加时间，默认为当前时间（ISO格式）
+
+**最简请求示例：**
+```json
+{
+  "name": "PlayerName",
+  "source": "API"
 }
 ```
 
@@ -144,17 +323,23 @@ X-Admin-Password: your-admin-password
 ```json
 {
   "success": true,
+  "message": "玩家添加成功",
   "data": {
-    "uuid": "550e8400-e29b-41d4-a716-446655440000",
-    "name": "Player1",
-    "created_at": "2024-01-01T00:00:00Z",
-    "updated_at": "2024-01-01T00:00:00Z",
-    "source": "api",
-    "notes": "VIP玩家"
+    "name": "PlayerName",
+    "added": true,
+    "uuid_pending": true,
+    "message": "玩家已添加到白名单，UUID将在首次登录时自动补充"
   },
   "timestamp": 1640995200000
 }
 ```
+
+**UUID补充机制：**
+当玩家首次登录服务器时，系统会自动：
+1. 检测到玩家UUID为空
+2. 自动更新数据库中的UUID
+3. 创建同步任务更新JSON文件
+4. 向玩家发送欢迎消息
 
 #### `DELETE /api/v1/whitelist/{uuid}`
 
@@ -174,23 +359,66 @@ X-Admin-Password: your-admin-password
 
 #### `POST /api/v1/whitelist/batch`
 
-批量添加白名单条目。
+批量操作白名单条目（支持批量添加和删除）。
 
-**请求体：**
+**批量添加请求体：**
 ```json
 {
-  "entries": [
+  "operation": "add",
+  "source": "API",
+  "added_by_name": "AdminName",
+  "added_by_uuid": "admin-uuid-here",
+  "added_at": "2024-01-01T12:00:00",
+  "players": [
     {
-      "uuid": "550e8400-e29b-41d4-a716-446655440000",
-      "name": "Player1",
-      "notes": "批量添加"
+      "name": "Player1"
     },
     {
-      "uuid": "550e8400-e29b-41d4-a716-446655440001",
-      "name": "Player2",
-      "notes": "批量添加"
+      "name": "Player2"
     }
   ]
+}
+```
+
+**批量删除请求体：**
+```json
+{
+  "operation": "remove",
+  "added_by_name": "AdminName",
+  "added_by_uuid": "admin-uuid-here",
+  "players": [
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "uuid": "550e8400-e29b-41d4-a716-446655440001"
+    }
+  ]
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "message": "批量操作完成",
+  "data": {
+    "operation": "add",
+    "total_requested": 2,
+    "success_count": 2,
+    "failed_count": 0,
+    "details": [
+      {
+        "name": "Player1",
+        "success": true
+      },
+      {
+        "name": "Player2", 
+        "success": true
+      }
+    ]
+  },
+  "timestamp": 1640995200000
 }
 ```
 
@@ -204,10 +432,76 @@ X-Admin-Password: your-admin-password
   "success": true,
   "data": {
     "total_entries": 150,
+    "active_entries": 148,
+    "uuid_pending_entries": 12,
     "recent_additions": 5,
     "recent_deletions": 2,
+    "recent_uuid_updates": 3,
+    "source_breakdown": {
+      "API": 80,
+      "ADMIN": 45,
+      "SYSTEM": 20,
+      "PLAYER": 5
+    },
     "sync_status": "active",
-    "last_sync": "2024-01-01T00:00:00Z"
+    "last_sync": "2024-01-01T00:00:00Z",
+    "cache_status": {
+      "loaded": true,
+      "size": 150,
+      "last_refresh": "2024-01-01T00:00:00Z"
+    }
+  },
+  "timestamp": 1640995200000
+}
+```
+
+#### `POST /api/v1/whitelist/sync`
+
+手动触发白名单同步。
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "message": "同步任务已创建",
+  "data": {
+    "task_id": 12345,
+    "task_type": "FULL_SYNC",
+    "status": "PENDING",
+    "created_at": "2024-01-01T00:00:00Z"
+  },
+  "timestamp": 1640995200000
+}
+```
+
+#### `GET /api/v1/whitelist/sync/status`
+
+获取同步状态信息。
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "sync_enabled": true,
+    "last_sync_time": "2024-01-01T00:00:00Z",
+    "sync_status": "completed",
+    "pending_tasks": 2,
+    "recent_tasks": [
+      {
+        "id": 12345,
+        "type": "FULL_SYNC",
+        "status": "COMPLETED",
+        "created_at": "2024-01-01T00:00:00Z",
+        "completed_at": "2024-01-01T00:00:05Z"
+      },
+      {
+        "id": 12346,
+        "type": "UPDATE_UUID",
+        "status": "PROCESSING",
+        "created_at": "2024-01-01T00:05:00Z"
+      }
+    ]
   },
   "timestamp": 1640995200000
 }
@@ -250,7 +544,17 @@ X-Admin-Password: your-admin-password
 
 用户注册（使用注册令牌）。
 
+> **🎯 改进**：现在注册只需要玩家名和令牌，UUID会在首次登录时自动补充！
+
 **请求体：**
+```json
+{
+  "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
+  "playerName": "PlayerName"
+}
+```
+
+**可选参数：**
 ```json
 {
   "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -259,16 +563,31 @@ X-Admin-Password: your-admin-password
 }
 ```
 
-**响应示例：**
+**响应示例（无UUID）：**
 ```json
 {
   "success": true,
+  "message": "注册成功",
+  "data": {
+    "playerName": "PlayerName",
+    "uuid_pending": true,
+    "message": "注册成功，已添加到白名单。UUID将在首次登录时自动补充"
+  },
+  "timestamp": 1640995200000
+}
+```
+
+**响应示例（提供UUID）：**
+```json
+{
+  "success": true,
+  "message": "注册成功",
   "data": {
     "playerName": "PlayerName",
     "playerUuid": "550e8400-e29b-41d4-a716-446655440000",
+    "uuid_pending": false,
     "message": "注册成功，已添加到白名单"
   },
-  "message": "注册成功",
   "timestamp": 1640995200000
 }
 ```
@@ -286,7 +605,7 @@ X-Admin-Password: your-admin-password
   "data": {
     "online": true,
     "spark_available": true,
-    "plugin_version": "0.1.0",
+    "plugin_version": "0.5.0",
     "timestamp": 1640995200000
   },
   "timestamp": 1640995200000
@@ -342,7 +661,7 @@ X-Admin-Password: your-admin-password
   "data": {
     "status": "healthy",
     "uptime": 1640995200000,
-    "version": "0.1.0",
+    "version": "0.5.0",
     "components": {
       "cache": "healthy",
       "data_collector": "healthy"
@@ -387,20 +706,50 @@ X-Admin-Password: your-admin-password
 
 ### 白名单管理示例
 
+#### 🎯 新版API - 简化的白名单管理
+
 ```bash
 # 1. 获取白名单列表
-curl -X GET http://localhost:22222/api/v1/whitelist
+curl -X GET http://localhost:22222/api/v1/whitelist \
+  -H "X-API-Key: sk-your-api-token-here"
 
-# 2. 添加白名单条目
+# 2. 添加白名单条目（只需玩家名）
 curl -X POST http://localhost:22222/api/v1/whitelist \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
   -d '{
-    "uuid": "550e8400-e29b-41d4-a716-446655440000",
     "name": "NewPlayer",
-    "notes": "新玩家"
+    "source": "API"
   }'
 
-# 3. 生成注册令牌（需要管理员密码）
+# 3. 添加白名单条目（完整参数）
+curl -X POST http://localhost:22222/api/v1/whitelist \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{
+    "name": "NewPlayer",
+    "source": "ADMIN", 
+    "added_by_name": "AdminUser",
+    "added_by_uuid": "admin-uuid-here"
+  }'
+
+# 4. 删除白名单条目
+curl -X DELETE http://localhost:22222/api/v1/whitelist/550e8400-e29b-41d4-a716-446655440000 \
+  -H "X-API-Key: sk-your-api-token-here"
+
+# 5. 获取白名单统计
+curl -X GET http://localhost:22222/api/v1/whitelist/stats \
+  -H "X-API-Key: sk-your-api-token-here"
+
+# 6. 手动触发同步
+curl -X POST http://localhost:22222/api/v1/whitelist/sync \
+  -H "X-API-Key: sk-your-api-token-here"
+
+# 7. 获取同步状态
+curl -X GET http://localhost:22222/api/v1/whitelist/sync/status \
+  -H "X-API-Key: sk-your-api-token-here"
+
+# 8. 生成注册令牌（需要管理员密码）
 curl -X POST http://localhost:22222/api/v1/admin/generate-token \
   -H "Content-Type: application/json" \
   -H "X-Admin-Password: your-admin-password" \
@@ -409,25 +758,56 @@ curl -X POST http://localhost:22222/api/v1/admin/generate-token \
   }'
 ```
 
-### 批量操作示例
+#### 批量操作示例
 
 ```bash
-# 批量添加白名单
+# 批量添加白名单（新版）
 curl -X POST http://localhost:22222/api/v1/whitelist/batch \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
   -d '{
-    "entries": [
-      {
-        "uuid": "550e8400-e29b-41d4-a716-446655440000",
-        "name": "Player1",
-        "notes": "VIP玩家"
-      },
-      {
-        "uuid": "550e8400-e29b-41d4-a716-446655440001", 
-        "name": "Player2",
-        "notes": "普通玩家"
-      }
+    "operation": "add",
+    "source": "API",
+    "added_by_name": "AdminUser",
+    "players": [
+      {"name": "Player1"},
+      {"name": "Player2"},
+      {"name": "Player3"}
     ]
+  }'
+
+# 批量删除白名单
+curl -X POST http://localhost:22222/api/v1/whitelist/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{
+    "operation": "remove",
+    "added_by_name": "AdminUser",
+    "players": [
+      {"uuid": "550e8400-e29b-41d4-a716-446655440000"},
+      {"uuid": "550e8400-e29b-41d4-a716-446655440001"}
+    ]
+  }'
+```
+
+#### 用户自助注册示例
+
+```bash
+# 用户注册（只需玩家名）
+curl -X POST http://localhost:22222/api/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
+    "playerName": "NewPlayer"
+  }'
+
+# 用户注册（提供UUID）
+curl -X POST http://localhost:22222/api/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx", 
+    "playerName": "NewPlayer",
+    "playerUuid": "550e8400-e29b-41d4-a716-446655440000"
   }'
 ```
 
@@ -435,10 +815,12 @@ curl -X POST http://localhost:22222/api/v1/whitelist/batch \
 
 ```bash
 # 获取服务器状态
-curl -X GET http://localhost:22222/api/v1/server/status
+curl -X GET http://localhost:22222/api/v1/server/status \
+  -H "X-API-Key: sk-your-api-token-here"
 
 # 获取服务器性能数据
-curl -X GET http://localhost:22222/api/v1/server/performance
+curl -X GET http://localhost:22222/api/v1/server/performance \
+  -H "X-API-Key: sk-your-api-token-here"
 
 # 健康检查（无需认证）
 curl -X GET http://localhost:22222/api/v1/health
@@ -446,23 +828,84 @@ curl -X GET http://localhost:22222/api/v1/health
 
 ## 版本信息
 
-- **当前版本**: v0.1.0
-- **API版本**: v1
-- **最后更新**: 2024-01-01
+- **当前版本**: v0.5.0
+- **API版本**: v1  
+- **最后更新**: 2025-10-02
 - **兼容性**: Minecraft 1.20.1, Arclight
+- **设计理念**: 基于 WhitelistPlus 插件设计
+
+## 更新日志
+
+### v0.5.0 (2025-10-02) - WhitelistPlus设计集成
+- 🎯 **重大改进**：基于WhitelistPlus设计理念重构白名单系统
+- ✨ **简化API**：添加白名单现在只需玩家名，UUID可选
+- 🔄 **自动UUID补充**：玩家首次登录时自动补充UUID
+- 📊 **增强统计**：新增UUID待补充状态、来源分解等统计信息
+- 🔧 **批量操作**：支持批量添加和删除操作
+- 📁 **同步系统**：新增UUID更新同步任务类型
+- 🎮 **兼容性**：完美支持离线和正版服务器
+- 📖 **文档更新**：全面更新API文档和使用示例
+
+### v0.1.0 (2024-01-01) - 初始版本
+- 🚀 初始版本发布
+- 📡 支持基本的服务器信息获取
+- ⚡ 集成 Spark 性能监控
+- 🌍 添加详细的维度信息
+- 📈 实现完整的性能数据收集
+- 🔐 基础白名单管理功能
+
+## 迁移指南
+
+### 从v0.1.0升级到v0.5.0
+
+**API变化：**
+1. `POST /api/v1/whitelist` 不再要求 `uuid` 参数
+2. 新增 `uuid_pending` 状态字段
+3. 批量操作API结构调整
+4. 新增同步状态查询端点
+
+**兼容性：**
+- ✅ 向后兼容：旧的API调用仍然有效
+- ✅ 数据库兼容：现有数据无需迁移
+- ✅ JSON文件兼容：现有白名单文件继续有效
+
+**建议操作：**
+```bash
+# 检查新的统计信息
+curl -X GET http://localhost:22222/api/v1/whitelist/stats \
+  -H "X-API-Key: sk-your-api-token-here"
+
+# 测试新的简化添加API
+curl -X POST http://localhost:22222/api/v1/whitelist \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{"name": "TestPlayer", "source": "API"}'
+```
 
 ## 技术支持
 
 如果您在使用API时遇到问题，请：
 
-1. 检查本文档中的错误代码说明
-2. 验证请求格式和认证信息
-3. 查看服务器日志获取详细错误信息
-4. 联系技术支持团队
+1. 📋 检查本文档中的错误代码说明
+2. 🔍 验证请求格式和认证信息  
+3. 📝 查看服务器日志获取详细错误信息
+4. 💬 查看 UUID自动补充机制 部分了解新特性
+5. 🆘 联系技术支持团队
+
+## 常见问题
+
+**Q: 为什么有些玩家的UUID显示为null？**
+A: 这是正常情况。采用新的设计后，玩家添加时UUID可以为空，会在首次登录时自动补充。
+
+**Q: 如何确认UUID已经补充？**  
+A: 可以通过 `GET /api/v1/whitelist/stats` 查看 `uuid_pending_entries` 数量，或查看具体玩家条目的 `uuid_pending` 字段。
+
+**Q: 旧的API调用还能使用吗？**
+A: 是的，系统保持向后兼容，但建议使用新的简化API以获得更好的体验。
 
 ---
 
-*本文档描述了ConvenientAccess白名单管理系统的简化API接口。系统专注于核心的白名单管理功能和服务器监控能力，适合管理员直接操作的场景。*
+*本文档描述了ConvenientAccess白名单管理系统的API接口。系统基于WhitelistPlus设计理念，专注于简化白名单管理流程，同时保持数据完整性和系统可靠性。*
 | 401 | 未授权访问 |
 | 403 | 访问被拒绝 |
 | 404 | API端点不存在 |
@@ -503,7 +946,11 @@ API 支持跨域请求，默认允许所有来源。可以在配置文件中自�
 
 ```javascript
 // 获取服务器状态
-fetch('http://your-server:22222/api/v1/server/status')
+fetch('http://your-server:22222/api/v1/server/status', {
+  headers: {
+    'X-API-Key': 'sk-your-api-token-here'
+  }
+})
   .then(response => response.json())
   .then(data => {
     if (data.success) {
@@ -512,7 +959,11 @@ fetch('http://your-server:22222/api/v1/server/status')
   });
 
 // 获取性能数据
-fetch('http://your-server:22222/api/v1/server/performance')
+fetch('http://your-server:22222/api/v1/server/performance', {
+  headers: {
+    'X-API-Key': 'sk-your-api-token-here'
+  }
+})
   .then(response => response.json())
   .then(data => {
     if (data.success) {
@@ -527,13 +978,31 @@ fetch('http://your-server:22222/api/v1/server/performance')
 ```python
 import requests
 
+# 设置认证头
+headers = {
+    'X-API-Key': 'sk-your-api-token-here'
+}
+
 # 获取玩家列表
-response = requests.get('http://your-server:22222/api/v1/players/list')
+response = requests.get('http://your-server:22222/api/v1/players/list', headers=headers)
 if response.status_code == 200:
     data = response.json()
     if data['success']:
         players = data['data']['players']
         print(f'在线玩家数: {len(players)}')
+
+# 添加白名单示例
+def add_player_to_whitelist(player_name, source="API"):
+    payload = {
+        "name": player_name,
+        "source": source
+    }
+    response = requests.post(
+        'http://your-server:22222/api/v1/whitelist',
+        json=payload,
+        headers=headers
+    )
+    return response.json()
 ```
 
 ### cURL
@@ -541,19 +1010,31 @@ if response.status_code == 200:
 ```bash
 # 获取服务器状态
 curl -X GET "http://your-server:22222/api/v1/server/status" \
+     -H "X-API-Key: sk-your-api-token-here" \
      -H "Accept: application/json"
 
-# 获取世界信息
+# 获取世界信息  
 curl -X GET "http://your-server:22222/api/v1/worlds/list" \
+     -H "X-API-Key: sk-your-api-token-here" \
      -H "Accept: application/json"
 
-# 带认证的请求
+# 使用Authorization Bearer认证的请求
 curl -X GET "http://your-server:22222/api/v1/server/performance" \
-     -H "Authorization: Bearer YOUR_API_KEY" \
+     -H "Authorization: Bearer sk-your-api-token-here" \
      -H "Accept: application/json"
 ```
 
 ## 更新日志
+
+### v0.5.0 (2025-10-02)
+- 🎉 **重大更新**：基于 WhitelistPlus 设计理念完全重构
+- ✨ **简化白名单管理**：添加白名单只需玩家名，UUID自动补充
+- 🔐 **新增认证系统**：可配置的API Token认证，默认启用安全保护
+- 🔑 **自动生成凭证**：插件首次启动自动生成管理员密码和API令牌
+- 📊 **增强统计功能**：新增UUID待补充状态、来源分析等详细统计
+- 🔄 **智能UUID补充**：玩家首次登录时自动补充UUID信息
+- 🚀 **批量操作优化**：支持名称批量添加，提高管理效率
+- 📝 **API文档更新**：完整的认证示例和使用指南
 
 ### v0.1.0
 - 初始版本发布

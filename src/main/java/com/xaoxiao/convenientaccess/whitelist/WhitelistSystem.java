@@ -97,7 +97,7 @@ public class WhitelistSystem {
                 // 设置管理员密码到UserApiController
                 userApiController.setAdminPassword(adminPassword);
                 
-                apiRouter = new ApiRouter(whitelistApiController, userApiController);
+                apiRouter = new ApiRouter(whitelistApiController, userApiController, plugin.getConfigManager());
                 
                 initialized = true;
                 logger.info("白名单管理系统（简化版）初始化完成");
