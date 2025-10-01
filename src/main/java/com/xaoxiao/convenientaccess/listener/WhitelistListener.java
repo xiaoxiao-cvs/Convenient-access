@@ -42,55 +42,79 @@ public class WhitelistListener implements Listener {
         String playerName = event.getName();
         String playerUuid = event.getUniqueId().toString();
         
-        logger.debug("检查玩家白名单状态: {} ({})", playerName, playerUuid);
+        logger.info("=== 白名单验证开始 ===");
+        logger.info("玩家: {} ({})", playerName, playerUuid);
+        logger.info("IP地址: {}", event.getAddress().getHostAddress());
         
         try {
             // 检查白名单系统是否已初始化
-            if (!plugin.getWhitelistSystem().isInitialized()) {
-                logger.warn("白名单系统未初始化，允许玩家 {} 进入", playerName);
+            boolean isSystemInitialized = plugin.getWhitelistSystem().isInitialized();
+            logger.info("白名单系统初始化状态: {}", isSystemInitialized);
+            
+            if (!isSystemInitialized) {
+                logger.warn("❌ 白名单系统未初始化，允许玩家 {} 进入", playerName);
                 return;
             }
             
             // 检查配置是否启用白名单
-            if (!plugin.getConfigManager().isWhitelistEnabled()) {
-                logger.debug("白名单功能已禁用，允许玩家 {} 进入", playerName);
+            boolean isWhitelistEnabled = plugin.getConfigManager().isWhitelistEnabled();
+            logger.info("白名单功能启用状态: {}", isWhitelistEnabled);
+            
+            if (!isWhitelistEnabled) {
+                logger.info("✅ 白名单功能已禁用，允许玩家 {} 进入", playerName);
                 return;
             }
             
+            // 检查玩家是否有绕过白名单的权限（需要提前在数据库或配置中设置）
+            // 注意：在PreLoginEvent中无法直接检查权限，因为玩家还未完全加载
+            // 这里可以通过其他方式实现，比如配置文件中的绕过列表
+            
+            // 检查白名单管理器状态
+            int cacheSize = whitelistManager.getCacheSize();
+            logger.info("白名单缓存大小: {}", cacheSize);
+            
             // 异步检查玩家是否在白名单中
+            logger.info("开始检查玩家白名单状态...");
             CompletableFuture<Boolean> whitelistCheck = whitelistManager.isPlayerWhitelisted(playerUuid);
             
             // 等待结果（设置合理的超时时间）
             Boolean isWhitelisted = whitelistCheck.get(5, TimeUnit.SECONDS);
+            logger.info("白名单检查结果: {}", isWhitelisted);
             
             if (!isWhitelisted) {
                 // 玩家不在白名单中，拒绝连接
                 String kickMessage = getCustomKickMessage(playerName);
                 event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_WHITELIST, kickMessage);
                 
-                logger.info("拒绝玩家连接（未在白名单中）: {} ({})", playerName, playerUuid);
+                logger.warn("❌ 拒绝玩家连接（未在白名单中）: {} ({})", playerName, playerUuid);
+                logger.info("踢出消息: {}", kickMessage);
                 
                 // 记录操作日志
                 logUnauthorizedAccess(playerName, playerUuid, event.getAddress().getHostAddress());
             } else {
-                logger.info("允许玩家连接（已在白名单中）: {} ({})", playerName, playerUuid);
+                logger.info("✅ 允许玩家连接（已在白名单中）: {} ({})", playerName, playerUuid);
             }
             
         } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException | InterruptedException e) {
-            logger.error("检查玩家白名单状态时发生错误: {} ({})", playerName, playerUuid, e);
+            logger.error("❌ 检查玩家白名单状态时发生错误: {} ({})", playerName, playerUuid, e);
             
             // 发生错误时的处理策略
-            if (plugin.getConfigManager().isWhitelistStrictMode()) {
+            boolean strictMode = plugin.getConfigManager().isWhitelistStrictMode();
+            logger.info("严格模式状态: {}", strictMode);
+            
+            if (strictMode) {
                 // 严格模式：发生错误时拒绝连接
                 event.disallow(
                     AsyncPlayerPreLoginEvent.Result.KICK_OTHER, 
                     "§c白名单验证失败，请稍后重试"
                 );
-                logger.warn("严格模式下拒绝玩家连接（白名单验证失败）: {}", playerName);
+                logger.warn("❌ 严格模式下拒绝玩家连接（白名单验证失败）: {}", playerName);
             } else {
                 // 宽松模式：发生错误时允许连接
-                logger.warn("宽松模式下允许玩家连接（白名单验证失败）: {}", playerName);
+                logger.warn("⚠️ 宽松模式下允许玩家连接（白名单验证失败）: {}", playerName);
             }
+        } finally {
+            logger.info("=== 白名单验证结束 ===");
         }
     }
     

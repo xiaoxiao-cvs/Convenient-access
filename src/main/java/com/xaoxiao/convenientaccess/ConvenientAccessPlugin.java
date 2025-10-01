@@ -41,11 +41,26 @@ public class ConvenientAccessPlugin extends JavaPlugin {
             dataCollector = new DataCollector(this, sparkIntegration, cacheManager);
             apiManager = new ApiManager(this, dataCollector);
             
+            // 注册命令
+            if (getCommand("convenientaccess") != null) {
+                getCommand("convenientaccess").setExecutor(new ConvenientAccessCommand(this));
+                logger.info("命令处理器已注册");
+            } else {
+                logger.warn("无法注册命令处理器 - 命令未在plugin.yml中定义");
+            }
+            
             // 初始化白名单管理系统
             whitelistSystem = new WhitelistSystem(this);
             whitelistSystem.initialize().thenAccept(success -> {
                 if (success) {
                     logger.info("白名单管理系统启动成功");
+                    
+                    // 在白名单系统初始化完成后注册监听器
+                    getServer().getPluginManager().registerEvents(
+                        new com.xaoxiao.convenientaccess.listener.WhitelistListener(this), 
+                        this
+                    );
+                    logger.info("白名单监听器已注册");
                     
                     // 在白名单系统初始化完成后启动HTTP服务器
                     if (configManager.isHttpEnabled()) {
@@ -66,16 +81,6 @@ public class ConvenientAccessPlugin extends JavaPlugin {
                 logger.error("白名单管理系统启动异常", throwable);
                 return null;
             });
-            
-            // 注册命令
-            getCommand("convenientaccess").setExecutor(new ConvenientAccessCommand(this));
-            
-            // 注册白名单监听器
-            getServer().getPluginManager().registerEvents(
-                new com.xaoxiao.convenientaccess.listener.WhitelistListener(this), 
-                this
-            );
-            logger.info("白名单监听器已注册");
             
             logger.info("ConvenientAccess 插件启动完成！");
             

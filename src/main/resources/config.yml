@@ -36,14 +36,12 @@ api:
 whitelist:
   # 是否启用白名单功能
   enabled: true
-  # 严格模式（验证失败时拒绝连接）
-  strict-mode: false
+  # 严格模式（验证失败时拒绝连接，建议开启用于调试）
+  strict-mode: true
   # 踢出消息（支持颜色代码 &）
   kick-message: |
     &c您不在服务器白名单中！
     &7请联系管理员申请加入白名单
-    &7服务器: {server}
-    &7联系方式: {contact}
   # 联系方式信息
   contact-info: "请联系管理员"
   # 注册令牌默认过期时间 (小时)
