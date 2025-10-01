@@ -1,20 +1,22 @@
 package com.xaoxiao.convenientaccess.api;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.util.UUID;
+import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.xaoxiao.convenientaccess.auth.RegistrationTokenManager;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistEntry;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistManager;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
  * 用户API控制器
@@ -30,10 +32,86 @@ public class UserApiController {
     // 玩家名称验证正则
     private static final Pattern PLAYER_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_]{3,16}$");
     
+    // 管理员密码（从WhitelistSystem获取）
+    private String adminPassword;
+    
     public UserApiController(RegistrationTokenManager tokenManager, WhitelistManager whitelistManager) {
         this.tokenManager = tokenManager;
         this.whitelistManager = whitelistManager;
         this.gson = new Gson();
+    }
+    
+    /**
+     * 设置管理员密码
+     */
+    public void setAdminPassword(String adminPassword) {
+        this.adminPassword = adminPassword;
+    }
+    
+    /**
+     * 处理POST /api/v1/admin/generate-token - 生成注册令牌
+     */
+    public void handleGenerateToken(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        try {
+            // 验证管理员密码
+            String providedPassword = request.getHeader("X-Admin-Password");
+            if (providedPassword == null || providedPassword.trim().isEmpty()) {
+                sendJsonResponse(response, 401, ApiResponse.unauthorized("缺少管理员密码"));
+                return;
+            }
+            
+            if (adminPassword == null || !adminPassword.equals(providedPassword.trim())) {
+                sendJsonResponse(response, 401, ApiResponse.unauthorized("管理员密码错误"));
+                return;
+            }
+            
+            // 读取请求体（可选参数）
+            String requestBody = readRequestBody(request);
+            JsonObject json = null;
+            int expiryHours = 24; // 默认24小时
+            
+            if (!requestBody.isEmpty()) {
+                try {
+                    json = JsonParser.parseString(requestBody).getAsJsonObject();
+                    if (json.has("expiryHours")) {
+                        expiryHours = json.get("expiryHours").getAsInt();
+                        if (expiryHours <= 0 || expiryHours > 168) { // 最大7天
+                            sendJsonResponse(response, 400, ApiResponse.badRequest("过期时间必须在1-168小时之间"));
+                            return;
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.warn("解析请求体失败，使用默认参数", e);
+                }
+            }
+            
+            final int finalExpiryHours = expiryHours; // 为lambda表达式创建final变量
+            
+            // 生成注册令牌
+            tokenManager.generateRegistrationToken(finalExpiryHours)
+                .thenAccept(token -> {
+                    if (token != null) {
+                        JsonObject responseData = new JsonObject();
+                        responseData.addProperty("token", token);
+                        responseData.addProperty("expiryHours", finalExpiryHours);
+                        responseData.addProperty("message", "令牌生成成功");
+                        
+                        sendJsonResponse(response, 200, ApiResponse.success(responseData, "令牌生成成功"));
+                        logger.info("管理员生成注册令牌成功，过期时间: {}小时", finalExpiryHours);
+                    } else {
+                        sendJsonResponse(response, 500, ApiResponse.error("令牌生成失败"));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("生成注册令牌失败", throwable);
+                    sendJsonResponse(response, 500, ApiResponse.error("令牌生成服务异常"));
+                    return null;
+                });
+                
+        } catch (Exception e) {
+            logger.error("处理令牌生成请求失败", e);
+            sendJsonResponse(response, 500, ApiResponse.error("服务器内部错误"));
+        }
     }
     
     /**

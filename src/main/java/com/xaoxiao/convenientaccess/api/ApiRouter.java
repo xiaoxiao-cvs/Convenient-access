@@ -1,13 +1,14 @@
 package com.xaoxiao.convenientaccess.api;
 
+import java.io.IOException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
 
 /**
  * API路由器（简化版）
@@ -101,8 +102,7 @@ public class ApiRouter extends HttpServlet {
              }
              // 令牌生成路由（简化版，需要管理员密码验证）
              else if (path.equals("/api/v1/admin/generate-token")) {
-                 // TODO: 需要在UserApiController中添加handleGenerateToken方法
-                 send404Response(response, "Token generation not implemented yet");
+                 userController.handleGenerateToken(request, response);
              }
             else {
                 send404Response(response, "API endpoint not found");

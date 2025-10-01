@@ -46,12 +46,19 @@ public class WhitelistManager {
      * 添加玩家到白名单
      */
     public CompletableFuture<Boolean> addPlayer(String name, String uuid, String addedByName, String addedByUuid, WhitelistEntry.Source source) {
+        return addPlayer(name, uuid, addedByName, addedByUuid, source, LocalDateTime.now());
+    }
+    
+    /**
+     * 添加玩家到白名单（支持自定义时间戳）
+     */
+    public CompletableFuture<Boolean> addPlayer(String name, String uuid, String addedByName, String addedByUuid, WhitelistEntry.Source source, LocalDateTime addedAt) {
         // 参数验证
         if (!isValidPlayerName(name) || !isValidUuid(uuid)) {
             return CompletableFuture.completedFuture(false);
         }
         
-        WhitelistEntry entry = new WhitelistEntry(name, uuid, addedByName, addedByUuid, source.getValue());
+        WhitelistEntry entry = new WhitelistEntry(name, uuid, addedByName, addedByUuid, source.getValue(), addedAt);
         
         return databaseManager.executeTransactionAsync(connection -> {
             String sql = """

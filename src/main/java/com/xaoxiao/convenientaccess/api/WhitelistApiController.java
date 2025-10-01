@@ -11,6 +11,7 @@ import com.google.gson.stream.JsonWriter;
 import com.xaoxiao.convenientaccess.sync.SyncTask;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
 import com.xaoxiao.convenientaccess.whitelist.BatchOperation;
+import com.xaoxiao.convenientaccess.utils.UuidUtils;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistEntry;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistManager;
 import com.xaoxiao.convenientaccess.whitelist.WhitelistStats;
@@ -112,18 +113,31 @@ public class WhitelistApiController {
             String requestBody = readRequestBody(request);
             JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
             
-            // 参数验证
-            if (!json.has("name") || !json.has("uuid") || 
-                !json.has("added_by_name") || !json.has("added_by_uuid")) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数"));
+            // 参数验证 - 要求name、added_by_name、added_by_uuid、source，uuid变为可选
+            if (!json.has("name") || !json.has("added_by_name") || !json.has("added_by_uuid") || !json.has("source")) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: name, added_by_name, added_by_uuid, source"));
                 return;
             }
             
             String name = json.get("name").getAsString();
-            String uuid = json.get("uuid").getAsString();
+            String providedUuid = json.has("uuid") ? json.get("uuid").getAsString() : null;
             String addedByName = json.get("added_by_name").getAsString();
             String addedByUuid = json.get("added_by_uuid").getAsString();
-            String sourceStr = json.has("source") ? json.get("source").getAsString() : "ADMIN";
+            String sourceStr = json.get("source").getAsString();
+            
+            // 处理时间戳 - 如果前端提供则使用，否则使用当前时间
+            LocalDateTime addedAt;
+            if (json.has("added_at")) {
+                try {
+                    String addedAtStr = json.get("added_at").getAsString();
+                    addedAt = LocalDateTime.parse(addedAtStr, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+                } catch (Exception e) {
+                    sendJsonResponse(response, 400, ApiResponse.badRequest("时间格式无效，请使用ISO格式: yyyy-MM-ddTHH:mm:ss"));
+                    return;
+                }
+            } else {
+                addedAt = LocalDateTime.now();
+            }
             
             // 验证参数格式
             if (!isValidPlayerName(name)) {
@@ -131,8 +145,12 @@ public class WhitelistApiController {
                 return;
             }
             
-            if (!isValidUuid(uuid)) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("UUID格式无效"));
+            // 生成或验证UUID
+            String uuid;
+            try {
+                uuid = UuidUtils.getOrGenerateUuid(name, providedUuid);
+            } catch (IllegalArgumentException e) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名不能为空"));
                 return;
             }
             
@@ -145,7 +163,7 @@ public class WhitelistApiController {
             }
             
             // 添加玩家
-            whitelistManager.addPlayer(name, uuid, addedByName, addedByUuid, source)
+            whitelistManager.addPlayer(name, uuid, addedByName, addedByUuid, source, addedAt)
                 .thenAccept(success -> {
                     if (success) {
                         // 创建同步任务
@@ -155,6 +173,7 @@ public class WhitelistApiController {
                         result.addProperty("uuid", uuid);
                         result.addProperty("name", name);
                         result.addProperty("added", true);
+                        result.addProperty("uuid_generated", providedUuid == null || providedUuid.trim().isEmpty());
                         
                         sendJsonResponse(response, 201, ApiResponse.success(result, "玩家添加成功"));
                     } else {
@@ -359,13 +378,37 @@ public class WhitelistApiController {
             JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
             
             // 参数验证
-            if (!json.has("operation") || !json.has("players")) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: operation, players"));
+            if (!json.has("operation") || !json.has("players") || !json.has("source")) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: operation, players, source"));
                 return;
             }
             
             String operation = json.get("operation").getAsString();
             JsonArray playersArray = json.getAsJsonArray("players");
+            String sourceStr = json.get("source").getAsString();
+            
+            // 验证source参数
+            WhitelistEntry.Source source;
+            try {
+                source = WhitelistEntry.Source.fromString(sourceStr);
+            } catch (IllegalArgumentException e) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("无效的来源类型: " + sourceStr));
+                return;
+            }
+            
+            // 解析时间戳（可选）
+            LocalDateTime addedAt;
+            if (json.has("added_at")) {
+                try {
+                    String addedAtStr = json.get("added_at").getAsString();
+                    addedAt = LocalDateTime.parse(addedAtStr, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+                } catch (Exception e) {
+                    sendJsonResponse(response, 400, ApiResponse.badRequest("无效的时间格式，请使用ISO格式: " + e.getMessage()));
+                    return;
+                }
+            } else {
+                addedAt = LocalDateTime.now();
+            }
             
             if (playersArray.size() == 0) {
                 sendJsonResponse(response, 400, ApiResponse.badRequest("玩家列表不能为空"));
@@ -380,15 +423,6 @@ public class WhitelistApiController {
             // 获取操作者信息
             String addedByName = json.has("added_by_name") ? json.get("added_by_name").getAsString() : "API";
             String addedByUuid = json.has("added_by_uuid") ? json.get("added_by_uuid").getAsString() : "00000000-0000-0000-0000-000000000000";
-            String sourceStr = json.has("source") ? json.get("source").getAsString() : "ADMIN";
-            
-            WhitelistEntry.Source source;
-            try {
-                source = WhitelistEntry.Source.fromString(sourceStr);
-            } catch (IllegalArgumentException e) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("无效的来源类型"));
-                return;
-            }
             
             if ("add".equalsIgnoreCase(operation)) {
                 // 批量添加
@@ -400,20 +434,29 @@ public class WhitelistApiController {
                 for (int i = 0; i < playersArray.size(); i++) {
                     JsonObject playerObj = playersArray.get(i).getAsJsonObject();
                     
-                    if (!playerObj.has("name") || !playerObj.has("uuid")) {
-                        sendJsonResponse(response, 400, ApiResponse.badRequest("玩家信息缺少name或uuid字段"));
+                    if (!playerObj.has("name")) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("玩家信息缺少name字段"));
                         return;
                     }
                     
                     String name = playerObj.get("name").getAsString();
-                    String uuid = playerObj.get("uuid").getAsString();
+                    String providedUuid = playerObj.has("uuid") ? playerObj.get("uuid").getAsString() : null;
                     
-                    if (!isValidPlayerName(name) || !isValidUuid(uuid)) {
-                        sendJsonResponse(response, 400, ApiResponse.badRequest("无效的玩家数据: " + name + " (" + uuid + ")"));
+                    if (!isValidPlayerName(name)) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("无效的玩家名: " + name));
                         return;
                     }
                     
-                    batchOperation.addEntry(name, uuid, source);
+                    // 生成或验证UUID
+                    String uuid;
+                    try {
+                        uuid = UuidUtils.getOrGenerateUuid(name, providedUuid);
+                    } catch (IllegalArgumentException e) {
+                        sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名不能为空: " + name));
+                        return;
+                    }
+                    
+                    batchOperation.addEntry(name, uuid, source, addedAt);
                 }
                 
                 // 执行批量添加

@@ -1,5 +1,10 @@
 package com.xaoxiao.convenientaccess.whitelist;
 
+import java.util.concurrent.CompletableFuture;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 import com.xaoxiao.convenientaccess.api.ApiRouter;
 import com.xaoxiao.convenientaccess.api.UserApiController;
@@ -8,10 +13,6 @@ import com.xaoxiao.convenientaccess.auth.InitialPasswordGenerator;
 import com.xaoxiao.convenientaccess.auth.RegistrationTokenManager;
 import com.xaoxiao.convenientaccess.database.DatabaseManager;
 import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.concurrent.CompletableFuture;
 
 /**
  * 白名单管理系统主类（简化版）
@@ -73,14 +74,29 @@ public class WhitelistSystem {
                 // 初始化注册令牌管理器
                 registrationTokenManager = new RegistrationTokenManager(databaseManager);
                 
-                // 生成初始管理员密码
-                passwordGenerator = new InitialPasswordGenerator();
-                adminPassword = passwordGenerator.generatePassword();
-                passwordGenerator.displayPassword(adminPassword);
+                // 检查配置文件中是否已有管理员密码
+                String existingPassword = plugin.getConfigManager().getAdminPassword();
+                if (existingPassword != null && !existingPassword.trim().isEmpty()) {
+                    // 使用现有密码
+                    adminPassword = existingPassword;
+                    logger.info("使用配置文件中的现有管理员密码");
+                } else {
+                    // 生成新的管理员密码
+                    passwordGenerator = new InitialPasswordGenerator();
+                    adminPassword = passwordGenerator.generatePassword();
+                    passwordGenerator.displayPassword(adminPassword);
+                    
+                    // 将管理员密码保存到配置文件
+                    plugin.getConfigManager().setAdminPassword(adminPassword);
+                }
                 
                 // 初始化API组件
                 whitelistApiController = new WhitelistApiController(whitelistManager, syncTaskManager);
                 userApiController = new UserApiController(registrationTokenManager, whitelistManager);
+                
+                // 设置管理员密码到UserApiController
+                userApiController.setAdminPassword(adminPassword);
+                
                 apiRouter = new ApiRouter(whitelistApiController, userApiController);
                 
                 initialized = true;

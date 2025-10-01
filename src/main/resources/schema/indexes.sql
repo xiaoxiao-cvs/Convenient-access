@@ -27,23 +27,6 @@ CREATE INDEX IF NOT EXISTS idx_registration_tokens_hash ON registration_tokens(t
 CREATE INDEX IF NOT EXISTS idx_registration_tokens_expires ON registration_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_registration_tokens_used ON registration_tokens(is_used);
 
--- 管理员用户表索引
-CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username);
-CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);
-
--- 管理员会话表索引
-CREATE INDEX IF NOT EXISTS idx_admin_sessions_session_id ON admin_sessions(session_id);
-CREATE INDEX IF NOT EXISTS idx_admin_sessions_user_id ON admin_sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expires_at);
-
--- 认证日志表索引
-CREATE INDEX IF NOT EXISTS idx_auth_logs_event_type ON auth_logs(event_type);
-CREATE INDEX IF NOT EXISTS idx_auth_logs_username ON auth_logs(username);
-CREATE INDEX IF NOT EXISTS idx_auth_logs_ip_address ON auth_logs(ip_address);
-CREATE INDEX IF NOT EXISTS idx_auth_logs_created_at ON auth_logs(created_at DESC);
-
--- 管理员操作日志表索引
-CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_user_id ON admin_operation_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_operation ON admin_operation_logs(operation);
-CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_resource_type ON admin_operation_logs(resource_type);
-CREATE INDEX IF NOT EXISTS idx_admin_operation_logs_created_at ON admin_operation_logs(created_at DESC);
+-- 管理员相关表的索引已移除，因为对应的表定义文件不存在
+-- 如果将来添加了管理员功能的表定义，可以重新添加这些索引：
+-- admin_users, admin_sessions, auth_logs, admin_operation_logs

@@ -30,6 +30,16 @@ public class WhitelistEntry {
         this.addedAt = LocalDateTime.now();
     }
     
+    public WhitelistEntry(String name, String uuid, String addedByName, String addedByUuid, String source, LocalDateTime addedAt) {
+        this.name = name;
+        this.uuid = uuid;
+        this.addedByName = addedByName;
+        this.addedByUuid = addedByUuid;
+        this.source = source;
+        this.isActive = true;
+        this.addedAt = addedAt;
+    }
+    
     // Getters and Setters
     public Long getId() {
         return id;

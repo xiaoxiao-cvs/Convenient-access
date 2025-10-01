@@ -113,7 +113,7 @@ X-Admin-Password: your-admin-password
         "created_at": "2024-01-01T00:00:00Z",
         "updated_at": "2024-01-01T00:00:00Z",
         "source": "manual",
-        "notes": "VIP玩家"
+        "notes": "op"
       }
     ],
     "pagination": {

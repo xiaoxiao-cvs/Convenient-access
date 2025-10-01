@@ -773,10 +773,30 @@ public class SyncTaskManager {
                             entry.setSource("manual");
                         }
                         
-                        // 设置默认的添加者信息
-                        entry.setAddedByName("System");
-                        entry.setAddedByUuid("00000000-0000-0000-0000-000000000000");
-                        entry.setAddedAt(LocalDateTime.now());
+                        // 设置添加者信息 - 优先使用JSON中的值，否则使用默认值
+                        if (obj.has("addedByName")) {
+                            entry.setAddedByName(obj.get("addedByName").getAsString());
+                        } else {
+                            entry.setAddedByName("System");
+                        }
+                        
+                        if (obj.has("addedByUUID")) {
+                            entry.setAddedByUuid(obj.get("addedByUUID").getAsString());
+                        } else {
+                            entry.setAddedByUuid("00000000-0000-0000-0000-000000000000");
+                        }
+                        
+                        if (obj.has("addedAt")) {
+                            try {
+                                entry.setAddedAt(LocalDateTime.parse(obj.get("addedAt").getAsString()));
+                            } catch (Exception e) {
+                                logger.debug("解析addedAt失败，使用当前时间: {}", e.getMessage());
+                                entry.setAddedAt(LocalDateTime.now());
+                            }
+                        } else {
+                            entry.setAddedAt(LocalDateTime.now());
+                        }
+                        
                         entry.setActive(true);
                         
                         entries.add(entry);

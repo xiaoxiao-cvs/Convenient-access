@@ -1,9 +1,10 @@
 package com.xaoxiao.convenientaccess.config;
 
-import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
+import java.util.List;
+
 import org.bukkit.configuration.file.FileConfiguration;
 
-import java.util.List;
+import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 
 /**
  * 配置管理器
@@ -70,6 +71,21 @@ public class ConfigManager {
         return config.getString("api.auth.api-key", "");
     }
     
+    /**
+     * 获取管理员密码
+     */
+    public String getAdminPassword() {
+        return config.getString("api.auth.admin-password", "");
+    }
+    
+    /**
+     * 设置管理员密码到配置文件
+     */
+    public void setAdminPassword(String password) {
+        config.set("api.auth.admin-password", password);
+        plugin.saveConfig();
+    }
+
     public boolean isRateLimitEnabled() {
         return config.getBoolean("api.rate-limit.enabled", true);
     }

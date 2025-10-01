@@ -1,5 +1,6 @@
 package com.xaoxiao.convenientaccess.whitelist;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -34,6 +35,15 @@ public class BatchOperation {
      */
     public BatchOperation addEntry(String name, String uuid, WhitelistEntry.Source source) {
         WhitelistEntry entry = new WhitelistEntry(name, uuid, operatorName, operatorUuid, source.getValue());
+        entries.add(entry);
+        return this;
+    }
+    
+    /**
+     * 添加条目到批量操作（指定来源和时间戳）
+     */
+    public BatchOperation addEntry(String name, String uuid, WhitelistEntry.Source source, LocalDateTime addedAt) {
+        WhitelistEntry entry = new WhitelistEntry(name, uuid, operatorName, operatorUuid, source.getValue(), addedAt);
         entries.add(entry);
         return this;
     }
