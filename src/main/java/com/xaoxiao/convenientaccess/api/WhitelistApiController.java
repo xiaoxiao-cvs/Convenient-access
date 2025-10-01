@@ -391,18 +391,10 @@ public class WhitelistApiController {
             }
             
             // 解析时间戳（可选）
-            LocalDateTime addedAt;
-            if (json.has("added_at")) {
-                try {
-                    String addedAtStr = json.get("added_at").getAsString();
-                    addedAt = LocalDateTime.parse(addedAtStr, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-                } catch (Exception e) {
-                    sendJsonResponse(response, 400, ApiResponse.badRequest("无效的时间格式，请使用ISO格式: " + e.getMessage()));
-                    return;
-                }
-            } else {
-                addedAt = LocalDateTime.now();
-            }
+                LocalDateTime addedAt = json.has("added_at") ? 
+                    LocalDateTime.parse(json.get("added_at").getAsString(), DateTimeFormatter.ISO_LOCAL_DATE_TIME) : 
+                    LocalDateTime.now();
+            
             
             if (playersArray.size() == 0) {
                 sendJsonResponse(response, 400, ApiResponse.badRequest("玩家列表不能为空"));
