@@ -601,7 +601,10 @@ public class WhitelistManager {
                 cache.clear();
                 while (rs.next()) {
                     WhitelistEntry entry = mapResultSetToEntry(rs);
-                    cache.put(entry.getUuid(), entry);
+                    // 只缓存有 UUID 的条目，UUID 待补充的条目不放入缓存
+                    if (entry.getUuid() != null) {
+                        cache.put(entry.getUuid(), entry);
+                    }
                 }
                 
                 cacheLoaded = true;
