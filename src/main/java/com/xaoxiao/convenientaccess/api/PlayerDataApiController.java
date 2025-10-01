@@ -37,12 +37,15 @@ public class PlayerDataApiController {
     }
     
     /**
-     * 处理GET /api/v1/player/{playerName} - 获取玩家详细数据
+     * 处理GET /api/v1/player?name=玩家名 - 获取玩家详细数据
      */
-    public void handleGetPlayerData(HttpServletRequest request, HttpServletResponse response, String playerName) throws IOException {
+    public void handleGetPlayerData(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        // 从查询参数中获取玩家名
+        String playerName = request.getParameter("name");
+        
         try {
             if (playerName == null || playerName.trim().isEmpty()) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名称不能为空"));
+                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名称不能为空，请使用 ?name=玩家名 参数"));
                 return;
             }
             

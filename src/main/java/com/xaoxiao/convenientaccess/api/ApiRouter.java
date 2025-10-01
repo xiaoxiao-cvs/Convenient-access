@@ -145,10 +145,9 @@ public class ApiRouter extends HttpServlet {
                     send404Response(response, "Endpoint not found");
                 }
             }
-            // 玩家数据查询路由
-            else if (path.startsWith("/api/v1/player/")) {
-                String playerName = path.substring("/api/v1/player/".length());
-                playerDataController.handleGetPlayerData(request, response, playerName);
+            // 玩家数据查询路由（使用查询参数）
+            else if (path.equals("/api/v1/player")) {
+                playerDataController.handleGetPlayerData(request, response);
             }
             else {
                 send404Response(response, "API endpoint not found");

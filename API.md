@@ -610,17 +610,17 @@ X-Admin-Password: your-admin-password
 
 ### 玩家数据查询 API
 
-#### `GET /api/v1/player/{playerName}`
+#### `GET /api/v1/player`
 
 获取指定玩家的详细数据，包括基本信息、位置、生命值、背包、装备等完整信息。
 
-**路径参数：**
-- `playerName` (string, 必需): 玩家名称
+**查询参数：**
+- `name` (string, 必需): 玩家名称
 
 **请求示例：**
 ```bash
 curl -H "X-API-Key: sk-your-api-token-here" \
-     -X GET http://your-server:22222/api/v1/player/PlayerName
+     -X GET "http://your-server:22222/api/v1/player?name=PlayerName"
 ```
 
 **响应示例（在线玩家）：**
