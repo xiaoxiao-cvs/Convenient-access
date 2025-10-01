@@ -87,26 +87,29 @@ public class UserApiController {
             
             final int finalExpiryHours = expiryHours; // 为lambda表达式创建final变量
             
-            // 生成注册令牌
-            tokenManager.generateRegistrationToken(finalExpiryHours)
-                .thenAccept(token -> {
-                    if (token != null) {
-                        JsonObject responseData = new JsonObject();
-                        responseData.addProperty("token", token);
-                        responseData.addProperty("expiryHours", finalExpiryHours);
-                        responseData.addProperty("message", "令牌生成成功");
-                        
-                        sendJsonResponse(response, 200, ApiResponse.success(responseData, "令牌生成成功"));
-                        logger.info("管理员生成注册令牌成功，过期时间: {}小时", finalExpiryHours);
-                    } else {
-                        sendJsonResponse(response, 500, ApiResponse.error("令牌生成失败"));
-                    }
-                })
-                .exceptionally(throwable -> {
-                    logger.error("生成注册令牌失败", throwable);
-                    sendJsonResponse(response, 500, ApiResponse.error("令牌生成服务异常"));
-                    return null;
-                });
+            // 生成注册令牌（同步等待结果）
+            try {
+                String token = tokenManager.generateRegistrationToken(finalExpiryHours).get();
+                
+                if (token != null) {
+                    JsonObject responseData = new JsonObject();
+                    responseData.addProperty("token", token);
+                    responseData.addProperty("expiryHours", finalExpiryHours);
+                    responseData.addProperty("message", "令牌生成成功");
+                    
+                    sendJsonResponse(response, 200, ApiResponse.success(responseData, "令牌生成成功"));
+                    logger.info("管理员生成注册令牌成功，过期时间: {}小时", finalExpiryHours);
+                } else {
+                    sendJsonResponse(response, 500, ApiResponse.error("令牌生成失败"));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.error("生成注册令牌被中断", e);
+                sendJsonResponse(response, 500, ApiResponse.error("令牌生成被中断"));
+            } catch (java.util.concurrent.ExecutionException e) {
+                logger.error("生成注册令牌失败", e);
+                sendJsonResponse(response, 500, ApiResponse.error("令牌生成服务异常: " + e.getMessage()));
+            }
                 
         } catch (Exception e) {
             logger.error("处理令牌生成请求失败", e);
@@ -150,73 +153,63 @@ public class UserApiController {
                 return;
             }
             
-            // 验证注册令牌
-            tokenManager.validateToken(token, clientIp)
-                .thenAccept(validationResult -> {
-                    if (!validationResult.isValid()) {
-                        sendJsonResponse(response, 400, ApiResponse.badRequest(validationResult.getMessage()));
-                        return;
+            // 验证注册令牌（同步等待结果）
+            try {
+                var validationResult = tokenManager.validateToken(token, clientIp).get();
+                
+                if (!validationResult.isValid()) {
+                    sendJsonResponse(response, 400, ApiResponse.badRequest(validationResult.getMessage()));
+                    return;
+                }
+                
+                // 检查玩家是否已在白名单中
+                boolean isWhitelisted = whitelistManager.isPlayerWhitelisted(playerUuid).get();
+                if (isWhitelisted) {
+                    sendJsonResponse(response, 409, ApiResponse.error("玩家已在白名单中"));
+                    return;
+                }
+                
+                // 添加玩家到白名单
+                boolean addSuccess = whitelistManager.addPlayer(
+                    playerName, 
+                    playerUuid, 
+                    "SYSTEM", 
+                    "00000000-0000-0000-0000-000000000000", 
+                    WhitelistEntry.Source.SYSTEM
+                ).get();
+                
+                if (!addSuccess) {
+                    sendJsonResponse(response, 500, ApiResponse.error("添加到白名单失败"));
+                    return;
+                }
+                
+                // 标记令牌为已使用
+                try {
+                    boolean markSuccess = tokenManager.markTokenAsUsed(validationResult.getTokenId(), clientIp).get();
+                    if (!markSuccess) {
+                        logger.warn("标记令牌为已使用失败，但玩家已添加到白名单");
                     }
-                    
-                    // 检查玩家是否已在白名单中
-                    whitelistManager.isPlayerWhitelisted(playerUuid)
-                        .thenAccept(isWhitelisted -> {
-                            if (isWhitelisted) {
-                                sendJsonResponse(response, 409, ApiResponse.error("玩家已在白名单中"));
-                                return;
-                            }
-                            
-                            // 添加玩家到白名单
-                            whitelistManager.addPlayer(
-                                playerName, 
-                                playerUuid, 
-                                "SYSTEM", 
-                                "00000000-0000-0000-0000-000000000000", 
-                                WhitelistEntry.Source.SYSTEM
-                            ).thenAccept(addSuccess -> {
-                                if (addSuccess) {
-                                    // 标记令牌为已使用
-                                    tokenManager.markTokenAsUsed(validationResult.getTokenId(), clientIp)
-                                        .thenAccept(markSuccess -> {
-                                            if (markSuccess) {
-                                                JsonObject responseData = new JsonObject();
-                                                responseData.addProperty("playerName", playerName);
-                                                responseData.addProperty("playerUuid", playerUuid);
-                                                responseData.addProperty("message", "注册成功，已添加到白名单");
-                                                
-                                                sendJsonResponse(response, 200, ApiResponse.success(responseData, "注册成功"));
-                                                logger.info("用户注册成功: {} ({})", playerName, playerUuid);
-                                            } else {
-                                                logger.error("标记令牌为已使用失败，但玩家已添加到白名单");
-                                                sendJsonResponse(response, 200, ApiResponse.success(null, "注册成功（令牌状态更新异常）"));
-                                            }
-                                        })
-                                        .exceptionally(throwable -> {
-                                            logger.error("标记令牌为已使用失败", throwable);
-                                            sendJsonResponse(response, 200, ApiResponse.success(null, "注册成功（令牌状态更新异常）"));
-                                            return null;
-                                        });
-                                } else {
-                                    sendJsonResponse(response, 500, ApiResponse.error("添加到白名单失败"));
-                                }
-                            })
-                            .exceptionally(throwable -> {
-                                logger.error("添加玩家到白名单失败", throwable);
-                                sendJsonResponse(response, 500, ApiResponse.error("白名单服务异常"));
-                                return null;
-                            });
-                        })
-                        .exceptionally(throwable -> {
-                            logger.error("检查玩家白名单状态失败", throwable);
-                            sendJsonResponse(response, 500, ApiResponse.error("白名单查询服务异常"));
-                            return null;
-                        });
-                })
-                .exceptionally(throwable -> {
-                    logger.error("验证注册令牌失败", throwable);
-                    sendJsonResponse(response, 500, ApiResponse.error("令牌验证服务异常"));
-                    return null;
-                });
+                } catch (Exception e) {
+                    logger.error("标记令牌为已使用失败", e);
+                }
+                
+                // 发送成功响应
+                JsonObject responseData = new JsonObject();
+                responseData.addProperty("playerName", playerName);
+                responseData.addProperty("playerUuid", playerUuid);
+                responseData.addProperty("message", "注册成功，已添加到白名单");
+                
+                sendJsonResponse(response, 200, ApiResponse.success(responseData, "注册成功"));
+                logger.info("用户注册成功: {} ({})", playerName, playerUuid);
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.error("用户注册被中断", e);
+                sendJsonResponse(response, 500, ApiResponse.error("注册被中断"));
+            } catch (java.util.concurrent.ExecutionException e) {
+                logger.error("用户注册失败", e);
+                sendJsonResponse(response, 500, ApiResponse.error("注册服务异常: " + e.getMessage()));
+            }
                 
         } catch (Exception e) {
             logger.error("处理用户注册请求失败", e);
