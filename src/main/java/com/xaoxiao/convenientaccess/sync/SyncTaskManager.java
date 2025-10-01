@@ -384,11 +384,14 @@ public class SyncTaskManager {
      * 启动任务处理器
      */
     private void startTaskProcessor() {
+        // 延迟10秒后开始处理任务,避免启动时数据库繁忙
         // 每5秒检查一次待处理任务
-        scheduler.scheduleWithFixedDelay(this::processPendingTasks, 0, 5, TimeUnit.SECONDS);
+        scheduler.scheduleWithFixedDelay(this::processPendingTasks, 10, 5, TimeUnit.SECONDS);
         
-        // 每30秒清理已完成的任务
+        // 延迟30秒后开始清理,每30秒清理一次已完成的任务
         scheduler.scheduleWithFixedDelay(this::cleanupCompletedTasks, 30, 30, TimeUnit.SECONDS);
+        
+        logger.info("任务处理器已启动,将在10秒后开始处理待处理任务");
     }
     
     /**
@@ -425,6 +428,7 @@ public class SyncTaskManager {
                 List<SyncTask> tasks = new ArrayList<>();
                 try (PreparedStatement stmt = connection.prepareStatement(sql)) {
                     stmt.setInt(1, limit);
+                    stmt.setQueryTimeout(10); // 设置SQL查询超时为10秒
                     
                     try (ResultSet rs = stmt.executeQuery()) {
                         while (rs.next()) {
@@ -433,7 +437,10 @@ public class SyncTaskManager {
                     }
                 }
                 return tasks;
-            }).get(5, TimeUnit.SECONDS);
+            }).get(15, TimeUnit.SECONDS); // 增加超时时间到15秒
+        } catch (java.util.concurrent.TimeoutException e) {
+            logger.warn("获取待处理任务超时,可能数据库繁忙,将在下次调度时重试");
+            return new ArrayList<>();
         } catch (Exception e) {
             logger.error("获取待处理任务失败", e);
             return new ArrayList<>();

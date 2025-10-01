@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -26,18 +28,26 @@ import jakarta.servlet.http.HttpServletResponse;
 /**
  * 玩家数据API控制器
  * 处理玩家详细数据查询的API请求
+ * 注意: 所有Bukkit API调用都必须在主线程中执行
  */
 public class PlayerDataApiController {
     private static final Logger logger = LoggerFactory.getLogger(PlayerDataApiController.class);
     
     private final Gson gson;
+    private final org.bukkit.plugin.Plugin plugin;
     
-    public PlayerDataApiController() {
+    // 并发查询限制
+    private final java.util.concurrent.Semaphore querySemaphore = new java.util.concurrent.Semaphore(5);
+    
+    public PlayerDataApiController(org.bukkit.plugin.Plugin plugin) {
         this.gson = new Gson();
+        this.plugin = plugin;
     }
     
     /**
      * 处理GET /api/v1/player?name=玩家名 - 获取玩家详细数据
+     * 注意: 必须在主线程中调用Bukkit API以避免线程安全问题
+     * 优化: 添加并发限制和更短的超时时间
      */
     public void handleGetPlayerData(HttpServletRequest request, HttpServletResponse response) throws IOException {
         // 从查询参数中获取玩家名
@@ -49,29 +59,49 @@ public class PlayerDataApiController {
                 return;
             }
             
-            // 首先尝试通过玩家名获取在线玩家
-            Player onlinePlayer = Bukkit.getPlayerExact(playerName);
-            
-            if (onlinePlayer != null) {
-                // 玩家在线，获取完整数据
-                PlayerData playerData = collectOnlinePlayerData(onlinePlayer);
-                sendJsonResponse(response, 200, ApiResponse.success(playerData, "成功获取玩家数据（在线）"));
-                logger.info("成功获取在线玩家数据: {}", playerName);
-            } else {
-                // 玩家离线，尝试获取离线玩家数据
-                @SuppressWarnings("deprecation")
-                OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(playerName);
-                
-                if (offlinePlayer.hasPlayedBefore()) {
-                    PlayerData playerData = collectOfflinePlayerData(offlinePlayer);
-                    sendJsonResponse(response, 200, ApiResponse.success(playerData, "成功获取玩家数据（离线）"));
-                    logger.info("成功获取离线玩家数据: {}", playerName);
-                } else {
-                    sendJsonResponse(response, 404, ApiResponse.notFound("玩家不存在或从未登录过服务器"));
-                    logger.warn("玩家不存在: {}", playerName);
-                }
+            // 尝试获取查询许可(最多5个并发查询)
+            if (!querySemaphore.tryAcquire(100, TimeUnit.MILLISECONDS)) {
+                logger.warn("查询请求过多,拒绝查询玩家: {}", playerName);
+                sendJsonResponse(response, 429, ApiResponse.error("查询请求过多,请稍后再试"));
+                return;
             }
             
+            try {
+                // 使用CompletableFuture在主线程中执行Bukkit API调用
+                CompletableFuture<PlayerData> future = new CompletableFuture<>();
+                
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    try {
+                        // 只查询在线玩家
+                        Player onlinePlayer = Bukkit.getPlayerExact(playerName);
+                        
+                        if (onlinePlayer != null && onlinePlayer.isOnline()) {
+                            // 玩家在线，获取完整数据
+                            PlayerData playerData = collectOnlinePlayerData(onlinePlayer);
+                            future.complete(playerData);
+                        } else {
+                            future.completeExceptionally(new IllegalArgumentException("玩家不在线或不存在"));
+                        }
+                    } catch (Exception e) {
+                        future.completeExceptionally(e);
+                    }
+                });
+                
+                // 缩短超时时间到3秒 - 如果服务器TPS不健康,快速失败
+                PlayerData playerData = future.get(3, TimeUnit.SECONDS);
+                sendJsonResponse(response, 200, ApiResponse.success(playerData, "成功获取玩家数据"));
+                logger.debug("成功获取在线玩家数据: {}", playerName);
+                
+            } finally {
+                querySemaphore.release();
+            }
+            
+        } catch (IllegalArgumentException e) {
+            sendJsonResponse(response, 404, ApiResponse.notFound(e.getMessage()));
+            logger.debug("玩家不在线: {}", playerName);
+        } catch (java.util.concurrent.TimeoutException e) {
+            logger.warn("获取玩家数据超时(3秒): {} - 服务器TPS可能不健康", playerName);
+            sendJsonResponse(response, 504, ApiResponse.error("服务器繁忙,请稍后重试(TPS过低)"));
         } catch (Exception e) {
             logger.error("获取玩家数据时发生错误: {}", playerName, e);
             sendJsonResponse(response, 500, ApiResponse.error("获取玩家数据失败: " + e.getMessage()));

@@ -94,7 +94,7 @@ public class WhitelistSystem {
                 // 初始化API组件
                 whitelistApiController = new WhitelistApiController(whitelistManager, syncTaskManager);
                 userApiController = new UserApiController(registrationTokenManager, whitelistManager);
-                PlayerDataApiController playerDataApiController = new PlayerDataApiController();
+                PlayerDataApiController playerDataApiController = new PlayerDataApiController(plugin);
                 
                 // 设置管理员密码到UserApiController
                 userApiController.setAdminPassword(adminPassword);

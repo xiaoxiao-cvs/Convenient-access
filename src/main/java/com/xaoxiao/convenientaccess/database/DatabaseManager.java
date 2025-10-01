@@ -1,19 +1,23 @@
 package com.xaoxiao.convenientaccess.database;
 
-import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 
 /**
  * SQLite数据库管理器
@@ -33,7 +37,8 @@ public class DatabaseManager {
     public DatabaseManager(ConvenientAccessPlugin plugin) {
         this.plugin = plugin;
         this.databasePath = plugin.getDataFolder().getAbsolutePath() + File.separator + "whitelist.db";
-        this.executorService = Executors.newFixedThreadPool(3, r -> {
+        // 增加线程池大小以处理更多并发数据库操作
+        this.executorService = Executors.newFixedThreadPool(8, r -> {
             Thread thread = new Thread(r, "DatabaseManager-Thread");
             thread.setDaemon(true);
             return thread;
@@ -54,13 +59,15 @@ public class DatabaseManager {
                 
                 // 创建数据库连接
                 try (Connection connection = getConnection()) {
-                    // 启用外键约束
+                    // 启用外键约束和优化并发性能
                     try (Statement stmt = connection.createStatement()) {
                         stmt.execute("PRAGMA foreign_keys = ON");
                         stmt.execute("PRAGMA journal_mode = WAL");
                         stmt.execute("PRAGMA synchronous = NORMAL");
                         stmt.execute("PRAGMA cache_size = 10000");
                         stmt.execute("PRAGMA temp_store = MEMORY");
+                        stmt.execute("PRAGMA busy_timeout = 30000"); // 设置30秒的锁等待超时
+                        stmt.execute("PRAGMA wal_autocheckpoint = 1000"); // WAL自动检查点
                     }
                     
                     // 检查数据库版本
@@ -90,7 +97,14 @@ public class DatabaseManager {
      * 获取数据库连接
      */
     public Connection getConnection() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite:" + databasePath);
+        Connection conn = DriverManager.getConnection("jdbc:sqlite:" + databasePath);
+        // 为每个连接设置 busy_timeout，处理并发锁等待
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("PRAGMA busy_timeout = 30000"); // 30秒超时
+        } catch (SQLException e) {
+            logger.warn("设置 busy_timeout 失败: {}", e.getMessage());
+        }
+        return conn;
     }
     
     /**
