@@ -1,19 +1,21 @@
 package com.xaoxiao.convenientaccess.http;
 
-import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
-import com.xaoxiao.convenientaccess.api.ApiManager;
-import com.xaoxiao.convenientaccess.api.ApiRouter;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Level;
+
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 
+import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
+import com.xaoxiao.convenientaccess.api.ApiManager;
+import com.xaoxiao.convenientaccess.api.ApiRouter;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.logging.Level;
 
 /**
  * HTTP服务器
@@ -139,10 +141,13 @@ public class HttpServer {
         }
         
         /**
-         * 判断是否为白名单或管理员API
+         * 判断是否为白名单、用户注册、玩家数据或管理员API
          */
         private boolean isWhitelistOrAdminApi(String path) {
-            return path.startsWith("/api/v1/whitelist") || path.startsWith("/api/v1/admin");
+            return path.startsWith("/api/v1/whitelist") || 
+                   path.startsWith("/api/v1/admin") ||
+                   path.startsWith("/api/v1/register") ||
+                   path.equals("/api/v1/player");
         }
         
         /**
