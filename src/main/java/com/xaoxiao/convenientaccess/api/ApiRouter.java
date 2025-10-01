@@ -21,11 +21,14 @@ public class ApiRouter extends HttpServlet {
     
     private final WhitelistApiController whitelistController;
     private final UserApiController userController;
+    private final PlayerDataApiController playerDataController;
     private final ConfigManager configManager;
     
-    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController, ConfigManager configManager) {
+    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController, 
+                     PlayerDataApiController playerDataController, ConfigManager configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
+        this.playerDataController = playerDataController;
         this.configManager = configManager;
     }
     
@@ -141,7 +144,13 @@ public class ApiRouter extends HttpServlet {
                 } else {
                     send404Response(response, "Endpoint not found");
                 }
-            } else {
+            }
+            // 玩家数据查询路由
+            else if (path.startsWith("/api/v1/player/")) {
+                String playerName = path.substring("/api/v1/player/".length());
+                playerDataController.handleGetPlayerData(request, response, playerName);
+            }
+            else {
                 send404Response(response, "API endpoint not found");
             }
         } catch (Exception e) {

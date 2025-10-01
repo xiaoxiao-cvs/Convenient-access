@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.xaoxiao.convenientaccess.api.ApiManager;
+import com.xaoxiao.convenientaccess.backup.BackupManager;
 import com.xaoxiao.convenientaccess.cache.CacheManager;
 import com.xaoxiao.convenientaccess.command.ConvenientAccessCommand;
 import com.xaoxiao.convenientaccess.config.ConfigManager;
@@ -26,6 +27,9 @@ public class ConvenientAccessPlugin extends JavaPlugin {
     
     // 白名单管理系统
     private WhitelistSystem whitelistSystem;
+    
+    // 备份管理器
+    private BackupManager backupManager;
     
     @Override
     public void onEnable() {
@@ -77,6 +81,11 @@ public class ConvenientAccessPlugin extends JavaPlugin {
                     } else {
                         logger.info("HTTP服务器已禁用");
                     }
+                    
+                    // 初始化备份管理器
+                    backupManager = new BackupManager(this, cacheManager);
+                    backupManager.initialize();
+                    logger.info("备份管理器已启动");
                 } else {
                     logger.error("白名单管理系统启动失败");
                 }
@@ -101,6 +110,11 @@ public class ConvenientAccessPlugin extends JavaPlugin {
             // 关闭HTTP服务器
             if (httpServer != null) {
                 httpServer.stop();
+            }
+            
+            // 关闭备份管理器
+            if (backupManager != null) {
+                backupManager.shutdown();
             }
             
             // 关闭白名单管理系统
@@ -146,6 +160,10 @@ public class ConvenientAccessPlugin extends JavaPlugin {
     
     public WhitelistSystem getWhitelistSystem() {
         return whitelistSystem;
+    }
+    
+    public BackupManager getBackupManager() {
+        return backupManager;
     }
     
     /**

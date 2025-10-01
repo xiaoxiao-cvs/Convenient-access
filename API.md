@@ -15,6 +15,17 @@
 
 ConvenientAccess 提供了一套简洁的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。基于 WhitelistPlus 设计理念，极大简化了白名单管理流程。所有 API 端点都返回 JSON 格式的数据，专注于核心功能和服务器监控。
 
+## 快速导航
+
+- [基础信息](#基础信息) - API基础配置和认证说明
+- [认证系统](#-认证系统) - API认证方式和安全配置
+- [白名单管理API](#白名单管理-api) - 白名单增删改查操作
+- [用户注册API](#用户注册-api) - 用户自助注册功能
+- [玩家数据查询API](#玩家数据查询-api) - 获取玩家详细信息 **[新增]**
+- [服务器监控API](#服务器监控-api) - 服务器状态和性能监控
+- [UUID自动补充机制](#-uuid自动补充机制) - 简化白名单管理流程
+- [响应格式](#响应格式) - 统一的响应格式说明
+
 ## 基础信息
 
 - **基础URL**: `http://your-server:22222/api/v1`
@@ -117,6 +128,11 @@ auth:
 | `/api/v1/admin/generate-token` | POST | 生成注册令牌 | 无（公开）* |
 
 *注：虽然是公开端点，但需要管理员密码验证
+
+### 玩家数据查询 API
+| 端点 | 方法 | 描述 | 认证要求 |
+|------|------|------|----------|
+| `/api/v1/player/{playerName}` | GET | 获取玩家详细数据 | API Token |
 
 ### 服务器监控 API
 | 端点 | 方法 | 描述 | 认证要求 |
@@ -591,6 +607,236 @@ X-Admin-Password: your-admin-password
   "timestamp": 1640995200000
 }
 ```
+
+### 玩家数据查询 API
+
+#### `GET /api/v1/player/{playerName}`
+
+获取指定玩家的详细数据，包括基本信息、位置、生命值、背包、装备等完整信息。
+
+**路径参数：**
+- `playerName` (string, 必需): 玩家名称
+
+**请求示例：**
+```bash
+curl -H "X-API-Key: sk-your-api-token-here" \
+     -X GET http://your-server:22222/api/v1/player/PlayerName
+```
+
+**响应示例（在线玩家）：**
+```json
+{
+  "success": true,
+  "data": {
+    "playerName": "PlayerName",
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "isOnline": true,
+    "hasPlayedBefore": true,
+    "firstPlayed": 1640995200000,
+    "lastPlayed": 1640995200000,
+    "lastLogin": 1640995200000,
+    "gameMode": "SURVIVAL",
+    "location": {
+      "world": "world",
+      "x": 123.45,
+      "y": 64.0,
+      "z": -67.89,
+      "yaw": 90.0,
+      "pitch": 0.0,
+      "dimension": "NORMAL"
+    },
+    "bedSpawnLocation": {
+      "world": "world",
+      "x": 100.0,
+      "y": 65.0,
+      "z": -50.0
+    },
+    "health": 20.0,
+    "maxHealth": 20.0,
+    "foodLevel": 20,
+    "saturation": 5.0,
+    "exhaustion": 0.0,
+    "level": 30,
+    "exp": 0.5,
+    "totalExperience": 825,
+    "remainingAir": 300,
+    "maximumAir": 300,
+    "fireTicks": 0,
+    "isFlying": false,
+    "allowFlight": false,
+    "isInvulnerable": false,
+    "isSneaking": false,
+    "isSprinting": false,
+    "isSwimming": false,
+    "isGliding": false,
+    "isBlocking": false,
+    "walkSpeed": 0.2,
+    "flySpeed": 0.1,
+    "potionEffects": [
+      {
+        "type": "SPEED",
+        "amplifier": 1,
+        "duration": 600,
+        "isAmbient": false,
+        "hasParticles": true,
+        "hasIcon": true
+      }
+    ],
+    "inventory": {
+      "mainInventory": [
+        {
+          "type": "DIAMOND_SWORD",
+          "amount": 1,
+          "damage": 0,
+          "maxDurability": 1561,
+          "slot": "0",
+          "displayName": "§6传奇之剑",
+          "enchantments": {
+            "sharpness": 5,
+            "unbreaking": 3
+          }
+        }
+      ],
+      "armor": [
+        {
+          "type": "DIAMOND_HELMET",
+          "amount": 1,
+          "damage": 10,
+          "maxDurability": 363,
+          "slot": "head",
+          "enchantments": {
+            "protection": 4
+          }
+        }
+      ],
+      "mainHand": {
+        "type": "DIAMOND_PICKAXE",
+        "amount": 1,
+        "damage": 50,
+        "maxDurability": 1561,
+        "enchantments": {
+          "efficiency": 5,
+          "fortune": 3
+        }
+      },
+      "offHand": {
+        "type": "TORCH",
+        "amount": 64
+      }
+    },
+    "enderChest": [
+      {
+        "type": "DIAMOND",
+        "amount": 64,
+        "slot": "0"
+      }
+    ],
+    "statistics": {
+      "playTime": 360000,
+      "deaths": 5,
+      "mobKills": 1234,
+      "playerKills": 10,
+      "timeSinceRest": 72000,
+      "damageTaken": 150.5,
+      "damageDealt": 5234.5
+    }
+  },
+  "message": "成功获取玩家数据（在线）",
+  "timestamp": "2025-10-02T12:00:00"
+}
+```
+
+**响应示例（离线玩家）：**
+```json
+{
+  "success": true,
+  "data": {
+    "playerName": "PlayerName",
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "isOnline": false,
+    "hasPlayedBefore": true,
+    "firstPlayed": 1640995200000,
+    "lastPlayed": 1640995200000,
+    "lastLogin": 1640995200000,
+    "gameMode": "UNKNOWN",
+    "bedSpawnLocation": {
+      "world": "world",
+      "x": 100.0,
+      "y": 65.0,
+      "z": -50.0
+    }
+  },
+  "message": "成功获取玩家数据（离线）",
+  "timestamp": "2025-10-02T12:00:00"
+}
+```
+
+**错误响应示例：**
+```json
+{
+  "success": false,
+  "error": "玩家不存在或从未登录过服务器",
+  "code": 404,
+  "timestamp": "2025-10-02T12:00:00"
+}
+```
+
+**数据字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `playerName` | string | 玩家名称 |
+| `uuid` | string | 玩家UUID |
+| `isOnline` | boolean | 是否在线 |
+| `hasPlayedBefore` | boolean | 是否曾经登录过 |
+| `firstPlayed` | long | 首次登录时间戳（毫秒） |
+| `lastPlayed` | long | 最后登录时间戳（毫秒） |
+| `lastLogin` | long | 最后登录时间戳（毫秒） |
+| `gameMode` | string | 游戏模式 (SURVIVAL/CREATIVE/ADVENTURE/SPECTATOR/UNKNOWN) |
+| `location` | object | 当前位置信息（仅在线） |
+| `location.world` | string | 世界名称 |
+| `location.x/y/z` | double | 坐标 |
+| `location.yaw/pitch` | float | 视角方向 |
+| `location.dimension` | string | 维度 (NORMAL/NETHER/THE_END) |
+| `bedSpawnLocation` | object | 重生点位置 |
+| `health` | double | 当前生命值（仅在线） |
+| `maxHealth` | double | 最大生命值（仅在线） |
+| `foodLevel` | int | 饥饿值（仅在线） |
+| `saturation` | float | 饱和度（仅在线） |
+| `level` | int | 经验等级（仅在线） |
+| `exp` | float | 当前等级经验进度（仅在线） |
+| `totalExperience` | int | 总经验值（仅在线） |
+| `remainingAir` | int | 剩余空气值（仅在线） |
+| `fireTicks` | int | 火焰剩余时间（仅在线） |
+| `isFlying` | boolean | 是否正在飞行（仅在线） |
+| `allowFlight` | boolean | 是否允许飞行（仅在线） |
+| `walkSpeed` | float | 行走速度（仅在线） |
+| `flySpeed` | float | 飞行速度（仅在线） |
+| `potionEffects` | array | 药水效果列表（仅在线） |
+| `inventory` | object | 背包信息（仅在线） |
+| `inventory.mainInventory` | array | 主背包物品 |
+| `inventory.armor` | array | 装备栏物品 |
+| `inventory.mainHand` | object | 主手物品 |
+| `inventory.offHand` | object | 副手物品 |
+| `enderChest` | array | 末影箱物品（仅在线） |
+| `statistics` | object | 游戏统计数据（仅在线） |
+| `statistics.playTime` | long | 游戏时长（秒） |
+| `statistics.deaths` | int | 死亡次数 |
+| `statistics.mobKills` | int | 生物击杀数 |
+| `statistics.playerKills` | int | 玩家击杀数 |
+
+**使用场景：**
+- 查看玩家当前状态和位置
+- 监控玩家背包和装备
+- 分析玩家游戏数据
+- 开发自定义管理工具
+- 生成玩家数据报告
+
+**注意事项：**
+- 离线玩家只能获取有限的基本信息
+- 在线玩家可以获取完整的实时数据
+- 需要 API Token 认证才能访问
+- 玩家名称区分大小写
 
 ### 服务器监控 API
 

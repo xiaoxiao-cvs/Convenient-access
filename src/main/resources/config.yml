@@ -92,3 +92,18 @@ logging:
   log-requests: true
   # 是否记录详细错误信息
   debug: true
+
+# 备份配置
+backup:
+  # 是否启用自动备份
+  enabled: true
+  # 备份时间配置
+  time:
+    # 备份时间 - 小时 (0-23)
+    hour: 2
+    # 备份时间 - 分钟 (0-59)
+    minute: 0
+  # 备份保留天数
+  retention-days: 7
+  # 是否压缩备份为ZIP格式
+  compress: true

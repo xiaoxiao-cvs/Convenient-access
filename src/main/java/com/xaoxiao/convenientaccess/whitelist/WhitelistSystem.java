@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 import com.xaoxiao.convenientaccess.api.ApiRouter;
+import com.xaoxiao.convenientaccess.api.PlayerDataApiController;
 import com.xaoxiao.convenientaccess.api.UserApiController;
 import com.xaoxiao.convenientaccess.api.WhitelistApiController;
 import com.xaoxiao.convenientaccess.auth.InitialPasswordGenerator;
@@ -93,11 +94,12 @@ public class WhitelistSystem {
                 // 初始化API组件
                 whitelistApiController = new WhitelistApiController(whitelistManager, syncTaskManager);
                 userApiController = new UserApiController(registrationTokenManager, whitelistManager);
+                PlayerDataApiController playerDataApiController = new PlayerDataApiController();
                 
                 // 设置管理员密码到UserApiController
                 userApiController.setAdminPassword(adminPassword);
                 
-                apiRouter = new ApiRouter(whitelistApiController, userApiController, plugin.getConfigManager());
+                apiRouter = new ApiRouter(whitelistApiController, userApiController, playerDataApiController, plugin.getConfigManager());
                 
                 initialized = true;
                 logger.info("白名单管理系统（简化版）初始化完成");
