@@ -100,7 +100,9 @@ public class WhitelistQueryBuilder {
     public WhitelistQueryBuilder paginate(int page, int size) {
         if (page < 1) page = 1;
         if (size < 1) size = 20;
-        if (size > 100) size = 100;
+        // 移除100条限制,允许获取所有数据
+        // 但为了防止极端情况,设置一个更大的上限
+        if (size > 999999) size = 999999;
         
         this.limit = size;
         this.offset = (page - 1) * size;
