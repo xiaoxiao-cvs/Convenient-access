@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -210,6 +211,49 @@ public class WhitelistManager {
             }
         }).exceptionally(throwable -> {
             logger.error("从白名单移除玩家失败: {}", uuid, throwable);
+            return false;
+        });
+    }
+    
+    /**
+     * 通过玩家名称从白名单移除玩家
+     */
+    public CompletableFuture<Boolean> removePlayerByName(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        return databaseManager.executeTransactionAsync(connection -> {
+            String sql = "DELETE FROM whitelist WHERE name = ?";
+            
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setString(1, name);
+                
+                int affected = stmt.executeUpdate();
+                if (affected > 0) {
+                    // 更新缓存 - 需要找到对应的UUID
+                    String uuidToRemove = null;
+                    for (Map.Entry<String, WhitelistEntry> entry : cache.entrySet()) {
+                        if (name.equals(entry.getValue().getName())) {
+                            uuidToRemove = entry.getKey();
+                            break;
+                        }
+                    }
+                    
+                    if (uuidToRemove != null) {
+                        WhitelistEntry removed = cache.remove(uuidToRemove);
+                        if (removed != null) {
+                            logger.info("从白名单移除玩家(按名称): {}", name);
+                        }
+                    } else {
+                        logger.info("从白名单移除玩家(按名称,未缓存): {}", name);
+                    }
+                    return true;
+                }
+                return false;
+            }
+        }).exceptionally(throwable -> {
+            logger.error("从白名单移除玩家失败(按名称): {}", name, throwable);
             return false;
         });
     }

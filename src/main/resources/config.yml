@@ -27,6 +27,14 @@ api:
     api-token: ""
     # 令牌前缀（不建议修改）
     token-prefix: "sk-"
+    # 登录失败限制 (防止暴力破解)
+    login-attempt-limit:
+      # 是否启用登录失败限制
+      enabled: true
+      # 最大失败尝试次数
+      max-attempts: 5
+      # 锁定时长 (分钟)
+      lock-duration-minutes: 15
   # 请求频率限制 (每分钟最大请求数)
   rate-limit:
     enabled: false

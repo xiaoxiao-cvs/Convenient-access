@@ -3,6 +3,8 @@ package com.xaoxiao.convenientaccess.config;
 import java.util.List;
 
 import org.bukkit.configuration.file.FileConfiguration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 
@@ -11,6 +13,7 @@ import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
  * 负责管理插件的所有配置项
  */
 public class ConfigManager {
+    private static final Logger logger = LoggerFactory.getLogger(ConfigManager.class);
     
     private final ConvenientAccessPlugin plugin;
     private FileConfiguration config;
@@ -27,6 +30,40 @@ public class ConfigManager {
         plugin.saveDefaultConfig();
         plugin.reloadConfig();
         this.config = plugin.getConfig();
+        
+        // 自动添加缺失的配置项
+        autoUpdateConfig();
+    }
+    
+    /**
+     * 自动更新配置文件
+     * 添加新版本中引入的配置项,同时保留用户的现有配置
+     */
+    private void autoUpdateConfig() {
+        boolean updated = false;
+        
+        // 检查并添加登录失败限制配置 (v0.5.0新增)
+        if (!config.contains("api.auth.login-attempt-limit.enabled")) {
+            config.set("api.auth.login-attempt-limit.enabled", true);
+            logger.info("添加配置项: api.auth.login-attempt-limit.enabled = true");
+            updated = true;
+        }
+        if (!config.contains("api.auth.login-attempt-limit.max-attempts")) {
+            config.set("api.auth.login-attempt-limit.max-attempts", 5);
+            logger.info("添加配置项: api.auth.login-attempt-limit.max-attempts = 5");
+            updated = true;
+        }
+        if (!config.contains("api.auth.login-attempt-limit.lock-duration-minutes")) {
+            config.set("api.auth.login-attempt-limit.lock-duration-minutes", 15);
+            logger.info("添加配置项: api.auth.login-attempt-limit.lock-duration-minutes = 15");
+            updated = true;
+        }
+        
+        // 如果有更新,保存配置文件
+        if (updated) {
+            plugin.saveConfig();
+            logger.info("✅ 配置文件已自动更新,添加了新的配置项 (登录失败限制功能)");
+        }
     }
     
     /**
@@ -105,6 +142,27 @@ public class ConfigManager {
     public void setAdminPassword(String password) {
         config.set("api.auth.admin-password", password);
         plugin.saveConfig();
+    }
+    
+    /**
+     * 是否启用登录失败限制
+     */
+    public boolean isLoginAttemptLimitEnabled() {
+        return config.getBoolean("api.auth.login-attempt-limit.enabled", true);
+    }
+    
+    /**
+     * 获取最大登录失败次数
+     */
+    public int getLoginMaxAttempts() {
+        return config.getInt("api.auth.login-attempt-limit.max-attempts", 5);
+    }
+    
+    /**
+     * 获取账号锁定时长(分钟)
+     */
+    public int getLoginLockDurationMinutes() {
+        return config.getInt("api.auth.login-attempt-limit.lock-duration-minutes", 15);
     }
 
     public boolean isRateLimitEnabled() {

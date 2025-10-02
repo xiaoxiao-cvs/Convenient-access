@@ -75,10 +75,19 @@ public class ConvenientAccessPlugin extends JavaPlugin {
                     
                     // 初始化管理员认证服务
                     try {
+                        // 创建登录失败限制服务
+                        com.xaoxiao.convenientaccess.auth.LoginAttemptService loginAttemptService = 
+                            new com.xaoxiao.convenientaccess.auth.LoginAttemptService(
+                                configManager.getLoginMaxAttempts(),
+                                configManager.getLoginLockDurationMinutes(),
+                                configManager.isLoginAttemptLimitEnabled()
+                            );
+                        
                         adminAuthService = new AdminAuthService(
                             whitelistSystem.getDatabaseManager(),
                             whitelistSystem.getRegistrationTokenManager(),
-                            configManager.getAdminPassword()
+                            configManager.getAdminPassword(),
+                            loginAttemptService
                         );
                         // 确保超级管理员账户存在
                         adminAuthService.ensureSuperAdminExists();

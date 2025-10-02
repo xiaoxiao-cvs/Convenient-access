@@ -287,13 +287,13 @@ public class WhitelistApiController {
                     WhitelistEntry player = playerOpt.get();
                     final String playerUuid = player.getUuid();
                     
-                    // 如果有 UUID,使用 UUID 删除;否则也通过 name 删除 (WhitelistManager支持)
+                    // 如果有 UUID,使用 UUID 删除;否则通过 name 删除
                     CompletableFuture<Boolean> removeFuture;
-                    if (playerUuid != null && !playerUuid.isEmpty()) {
+                    if (playerUuid != null && !playerUuid.isEmpty() && !playerUuid.equals("null")) {
                         removeFuture = whitelistManager.removePlayer(playerUuid);
                     } else {
-                        // UUID 为 null,仍然可以删除(按名称删除)
-                        removeFuture = whitelistManager.removePlayer(name);
+                        // UUID 为 null 或 "null" 字符串,使用名称删除
+                        removeFuture = whitelistManager.removePlayerByName(name);
                     }
                     
                     return removeFuture.thenApply(success -> {

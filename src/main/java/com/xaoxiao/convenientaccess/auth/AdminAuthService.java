@@ -17,12 +17,15 @@ public class AdminAuthService {
     private final AdminUserDao adminUserDao;
     private final AuthLogDao authLogDao;
     private final RegistrationTokenManager tokenManager;
+    private final LoginAttemptService loginAttemptService;
     private final String systemAdminPassword;
     
-    public AdminAuthService(DatabaseManager dbManager, RegistrationTokenManager tokenManager, String systemAdminPassword) {
+    public AdminAuthService(DatabaseManager dbManager, RegistrationTokenManager tokenManager, 
+                           String systemAdminPassword, LoginAttemptService loginAttemptService) {
         this.adminUserDao = new AdminUserDao(dbManager);
         this.authLogDao = new AuthLogDao(dbManager);
         this.tokenManager = tokenManager;
+        this.loginAttemptService = loginAttemptService;
         this.systemAdminPassword = systemAdminPassword;
         
         // 初始化JWT密钥
@@ -60,9 +63,22 @@ public class AdminAuthService {
      */
     public LoginResult login(String username, String password, String ipAddress) {
         try {
+            // 🔐 检查是否被锁定
+            if (loginAttemptService.isBlocked(username, ipAddress)) {
+                long remainingSeconds = loginAttemptService.getRemainingLockTime(username, ipAddress);
+                long remainingMinutes = remainingSeconds / 60;
+                String message = String.format("账号已锁定,请在 %d 分钟后重试", remainingMinutes);
+                authLogDao.logAuth(username, "BLOCKED_LOGIN", false, ipAddress, null, "账号已锁定");
+                logger.warn("🔒 登录被拒绝 - 用户: {}, IP: {}, 原因: 账号锁定, 剩余: {}分钟", 
+                           username, ipAddress, remainingMinutes);
+                return LoginResult.failure(message);
+            }
+            
             // 查找管理员
             Optional<AdminUser> userOpt = adminUserDao.findByUsername(username);
             if (!userOpt.isPresent()) {
+                // 🔐 记录失败尝试
+                loginAttemptService.recordFailure(username, ipAddress);
                 authLogDao.logAuth(username, "FAILED_LOGIN", false, ipAddress, null, "用户不存在");
                 return LoginResult.failure("用户名或密码错误");
             }
@@ -77,9 +93,17 @@ public class AdminAuthService {
             
             // 验证密码
             if (!PasswordUtil.verifyPassword(password, user.getPasswordHash())) {
-                authLogDao.logAuth(username, "FAILED_LOGIN", false, ipAddress, null, "密码错误");
+                // 🔐 记录失败尝试
+                loginAttemptService.recordFailure(username, ipAddress);
+                
+                int failureCount = loginAttemptService.getFailureCount(username, ipAddress);
+                authLogDao.logAuth(username, "FAILED_LOGIN", false, ipAddress, null, 
+                                  String.format("密码错误 (失败次数: %d)", failureCount));
                 return LoginResult.failure("用户名或密码错误");
             }
+            
+            // 🔐 密码验证成功,清除失败记录
+            loginAttemptService.resetAttempts(username, ipAddress);
             
             // 生成JWT token
             String token = JwtUtil.generateToken(user.getId(), user.getUsername(), TOKEN_EXPIRATION_HOURS);
@@ -90,7 +114,7 @@ public class AdminAuthService {
             // 记录登录日志
             authLogDao.logAuth(username, "LOGIN", true, ipAddress, null, null);
             
-            logger.info("管理员 {} 登录成功", username);
+            logger.info("✅ 管理员 {} 登录成功, IP: {}", username, ipAddress);
             return LoginResult.success(token, user);
             
         } catch (Exception e) {
