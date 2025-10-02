@@ -41,8 +41,9 @@ public class BackupManager {
     
     // 配置项
     private boolean enabled;
-    private int backupHour;  // 备份时间（小时，0-23）
-    private int backupMinute;  // 备份时间（分钟，0-59）
+    private int backupDays;  // 备份间隔（天）
+    private int backupHours;  // 备份时间（小时，0-23）
+    private int backupMinutes;  // 备份时间（分钟，0-59）
     private int retentionDays;  // 备份保留天数
     private boolean compressBackup;  // 是否压缩备份
     
@@ -75,50 +76,143 @@ public class BackupManager {
             return;
         }
         
-        logger.info("备份功能已启用，备份时间: {}:{:02d}, 保留天数: {}", 
-                   backupHour, backupMinute, retentionDays);
+        String scheduleInfo = backupDays > 0 
+            ? String.format("每%d天 %02d:%02d", backupDays, backupHours, backupMinutes)
+            : String.format("每天 %02d:%02d", backupHours, backupMinutes);
+        logger.info("备份功能已启用，备份计划: {}, 保留天数: {}", scheduleInfo, retentionDays);
         
         // 计算到下一次备份的延迟时间
         long initialDelay = calculateInitialDelay();
         
-        // 调度定时备份任务（每24小时执行一次）
+        // 计算备份间隔（秒）
+        long intervalDays = backupDays > 0 ? backupDays : 1;
+        long intervalSeconds = TimeUnit.DAYS.toSeconds(intervalDays);
+        
+        // 调度定时备份任务
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 performBackup();
             } catch (Exception e) {
                 logger.error("执行备份任务时发生异常", e);
             }
-        }, initialDelay, TimeUnit.DAYS.toSeconds(1), TimeUnit.SECONDS);
+        }, initialDelay, intervalSeconds, TimeUnit.SECONDS);
         
-        logger.info("备份任务已调度，首次备份将在 {} 秒后执行", initialDelay);
+        String delayInfo = formatDuration(initialDelay);
+        logger.info("备份任务已调度，首次备份将在 {} 后执行", delayInfo);
         
         // 清理过期备份
         cleanupOldBackups();
     }
     
     /**
-     * 从配置文件加载配置
+     * 从配置文件加载配置（支持新旧格式自动升级）
      */
     private void loadConfiguration() {
         enabled = plugin.getConfig().getBoolean("backup.enabled", true);
-        backupHour = plugin.getConfig().getInt("backup.time.hour", 2);
-        backupMinute = plugin.getConfig().getInt("backup.time.minute", 0);
         retentionDays = plugin.getConfig().getInt("backup.retention-days", 7);
         compressBackup = plugin.getConfig().getBoolean("backup.compress", true);
         
+        // 优先使用新格式 "d:h:m"
+        String schedule = plugin.getConfig().getString("backup.schedule");
+        boolean upgraded = false;
+        
+        if (schedule != null && !schedule.isEmpty()) {
+            // 解析新格式
+            if (parseSchedule(schedule)) {
+                logger.info("使用新格式备份计划: {}", schedule);
+            } else {
+                logger.warn("备份计划格式无效 ({}), 尝试使用旧格式", schedule);
+                upgraded = loadLegacyConfiguration();
+            }
+        } else {
+            // 尝试使用旧格式
+            upgraded = loadLegacyConfiguration();
+        }
+        
+        // 如果从旧格式升级,保存新格式到配置
+        if (upgraded) {
+            String newSchedule = String.format("%d:%d:%d", backupDays, backupHours, backupMinutes);
+            plugin.getConfig().set("backup.schedule", newSchedule);
+            // 移除旧配置
+            plugin.getConfig().set("backup.time", null);
+            plugin.saveConfig();
+            logger.info("✓ 配置已自动升级为新格式: {}", newSchedule);
+        }
+        
         // 验证配置
-        if (backupHour < 0 || backupHour > 23) {
-            logger.warn("备份小时配置无效 ({}), 使用默认值 2", backupHour);
-            backupHour = 2;
-        }
-        if (backupMinute < 0 || backupMinute > 59) {
-            logger.warn("备份分钟配置无效 ({}), 使用默认值 0", backupMinute);
-            backupMinute = 0;
-        }
         if (retentionDays < 1) {
             logger.warn("备份保留天数配置无效 ({}), 使用默认值 7", retentionDays);
             retentionDays = 7;
         }
+    }
+    
+    /**
+     * 解析备份计划字符串 "d:h:m"
+     * @param schedule 格式: "天:小时:分钟", 例如 "0:2:30" 或 "1:0:0"
+     * @return 解析是否成功
+     */
+    private boolean parseSchedule(String schedule) {
+        try {
+            String[] parts = schedule.split(":");
+            if (parts.length != 3) {
+                return false;
+            }
+            
+            int days = Integer.parseInt(parts[0].trim());
+            int hours = Integer.parseInt(parts[1].trim());
+            int minutes = Integer.parseInt(parts[2].trim());
+            
+            // 验证范围
+            if (days < 0 || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+                logger.warn("备份计划值超出有效范围: d={}, h={}, m={}", days, hours, minutes);
+                return false;
+            }
+            
+            this.backupDays = days;
+            this.backupHours = hours;
+            this.backupMinutes = minutes;
+            return true;
+        } catch (Exception e) {
+            logger.warn("解析备份计划失败: {}", schedule, e);
+            return false;
+        }
+    }
+    
+    /**
+     * 加载旧格式配置 (backup.time.hour 和 backup.time.minute)
+     * @return 是否成功从旧格式加载
+     */
+    private boolean loadLegacyConfiguration() {
+        if (plugin.getConfig().contains("backup.time.hour") || 
+            plugin.getConfig().contains("backup.time.minute")) {
+            
+            int hour = plugin.getConfig().getInt("backup.time.hour", 2);
+            int minute = plugin.getConfig().getInt("backup.time.minute", 0);
+            
+            // 验证旧格式配置
+            if (hour < 0 || hour > 23) {
+                logger.warn("旧格式备份小时配置无效 ({}), 使用默认值 2", hour);
+                hour = 2;
+            }
+            if (minute < 0 || minute > 59) {
+                logger.warn("旧格式备份分钟配置无效 ({}), 使用默认值 0", minute);
+                minute = 0;
+            }
+            
+            this.backupDays = 0;  // 旧格式默认每天
+            this.backupHours = hour;
+            this.backupMinutes = minute;
+            
+            logger.info("检测到旧格式配置,将自动升级");
+            return true;
+        }
+        
+        // 使用默认值
+        this.backupDays = 0;
+        this.backupHours = 2;
+        this.backupMinutes = 0;
+        logger.info("使用默认备份计划: 每天 02:00");
+        return false;
     }
     
     /**
@@ -129,18 +223,47 @@ public class BackupManager {
         Calendar nextBackup = Calendar.getInstance();
         
         // 设置下一次备份时间
-        nextBackup.set(Calendar.HOUR_OF_DAY, backupHour);
-        nextBackup.set(Calendar.MINUTE, backupMinute);
+        nextBackup.set(Calendar.HOUR_OF_DAY, backupHours);
+        nextBackup.set(Calendar.MINUTE, backupMinutes);
         nextBackup.set(Calendar.SECOND, 0);
         nextBackup.set(Calendar.MILLISECOND, 0);
         
-        // 如果今天的备份时间已经过了，则调度到明天
+        // 如果设置了天数间隔,添加天数
+        if (backupDays > 0) {
+            nextBackup.add(Calendar.DAY_OF_MONTH, backupDays);
+        }
+        
+        // 如果计算出的备份时间已经过了，则调度到下一个周期
         if (nextBackup.before(now) || nextBackup.equals(now)) {
-            nextBackup.add(Calendar.DAY_OF_MONTH, 1);
+            if (backupDays > 0) {
+                nextBackup.add(Calendar.DAY_OF_MONTH, backupDays);
+            } else {
+                nextBackup.add(Calendar.DAY_OF_MONTH, 1);
+            }
         }
         
         long delayMillis = nextBackup.getTimeInMillis() - now.getTimeInMillis();
         return delayMillis / 1000;
+    }
+    
+    /**
+     * 格式化时间间隔为易读的字符串
+     * @param seconds 秒数
+     * @return 格式化的字符串,例如 "2天3小时15分钟"
+     */
+    private String formatDuration(long seconds) {
+        long days = seconds / 86400;
+        long hours = (seconds % 86400) / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+        
+        StringBuilder sb = new StringBuilder();
+        if (days > 0) sb.append(days).append("天");
+        if (hours > 0) sb.append(hours).append("小时");
+        if (minutes > 0) sb.append(minutes).append("分钟");
+        if (secs > 0 && days == 0) sb.append(secs).append("秒");
+        
+        return sb.length() > 0 ? sb.toString() : "0秒";
     }
     
     /**
