@@ -22,15 +22,17 @@ public class ApiRouter extends HttpServlet {
     private final WhitelistApiController whitelistController;
     private final UserApiController userController;
     private final PlayerDataApiController playerDataController;
+    private final OperationLogApiController operationLogController;
     private AdminAuthController adminAuthController;
     private final ConfigManager configManager;
     
     public ApiRouter(WhitelistApiController whitelistController, UserApiController userController, 
-                     PlayerDataApiController playerDataController, AdminAuthController adminAuthController,
-                     ConfigManager configManager) {
+                     PlayerDataApiController playerDataController, OperationLogApiController operationLogController,
+                     AdminAuthController adminAuthController, ConfigManager configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
         this.playerDataController = playerDataController;
+        this.operationLogController = operationLogController;
         this.adminAuthController = adminAuthController;
         this.configManager = configManager;
     }
@@ -102,8 +104,7 @@ public class ApiRouter extends HttpServlet {
      */
     private boolean isPublicEndpoint(String path) {
         return path.equals("/api/v1/admin/login") || 
-               path.equals("/api/v1/admin/register") ||
-               path.equals("/api/v1/admin/generate-token");
+               path.equals("/api/v1/admin/register");
     }
     
     /**
@@ -157,8 +158,18 @@ public class ApiRouter extends HttpServlet {
         }
         
         try {
+            // 操作日志相关路由
+            if (path.startsWith("/api/v1/logs/operations")) {
+                if (path.equals("/api/v1/logs/operations")) {
+                    operationLogController.handleGetOperationLogs(request, response);
+                } else if (path.equals("/api/v1/logs/operations/stats")) {
+                    operationLogController.handleGetOperationStats(request, response);
+                } else {
+                    send404Response(response, "Endpoint not found");
+                }
+            }
             // 白名单相关路由
-            if (path.startsWith("/api/v1/whitelist")) {
+            else if (path.startsWith("/api/v1/whitelist")) {
                 if (path.equals("/api/v1/whitelist")) {
                     whitelistController.handleGetWhitelist(request, response);
                 } else if (path.equals("/api/v1/whitelist/stats")) {
@@ -267,7 +278,12 @@ public class ApiRouter extends HttpServlet {
         
         try {
              // 白名单删除路由
-             if (path.startsWith("/api/v1/whitelist/")) {
+             if (path.startsWith("/api/v1/whitelist/by-name/")) {
+                 // 通过名称删除
+                 String name = path.substring("/api/v1/whitelist/by-name/".length());
+                 whitelistController.handleRemovePlayerByName(request, response, name);
+             } else if (path.startsWith("/api/v1/whitelist/")) {
+                 // 通过 UUID 删除
                  String uuid = path.substring("/api/v1/whitelist/".length());
                  whitelistController.handleRemovePlayer(request, response, uuid);
              } else {

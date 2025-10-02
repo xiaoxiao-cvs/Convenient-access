@@ -32,7 +32,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
     
     // 数据库版本
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2; // 增加版本以支持管理员认证系统
     
     public DatabaseManager(ConvenientAccessPlugin plugin) {
         this.plugin = plugin;
@@ -155,6 +155,9 @@ public class DatabaseManager {
             "schema/sync_tasks.sql", 
             "schema/operation_log.sql",
             "schema/registration_tokens.sql",
+            "schema/admin_users.sql",
+            "schema/admin_sessions.sql",
+            "schema/auth_logs.sql",
             "schema/indexes.sql"
         };
         

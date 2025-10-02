@@ -152,14 +152,6 @@ public class WhitelistListener implements Listener {
                             if (success) {
                                 logger.info("✅ 成功为玩家 {} 补充UUID: {}", playerName, playerUuid);
                                 
-                                // 创建UUID更新同步任务
-                                plugin.getWhitelistSystem().getSyncTaskManager().scheduleUuidUpdate(playerName, playerUuid)
-                                    .thenAccept(taskId -> logger.debug("UUID更新同步任务已创建: {}", taskId))
-                                    .exceptionally(throwable -> {
-                                        logger.warn("创建UUID更新同步任务失败", throwable);
-                                        return null;
-                                    });
-                                
                                 // 发送通知消息
                                 handlePlayerJoinNotifications(player, entry);
                                 // 向玩家发送UUID补充成功的消息

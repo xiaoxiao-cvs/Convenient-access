@@ -4,8 +4,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -182,6 +183,32 @@ public class AdminUserDao {
     }
     
     /**
+     * 解析时间戳字符串,支持多种格式
+     * 支持格式:
+     * 1. ISO-8601: 2025-10-03T03:26:41.122310300
+     * 2. 传统格式: 2025-10-02 19:14:52
+     */
+    private LocalDateTime parseTimestamp(String timestampStr) {
+        if (timestampStr == null || timestampStr.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            // 首先尝试 ISO-8601 格式 (默认格式,支持纳秒)
+            return LocalDateTime.parse(timestampStr);
+        } catch (DateTimeParseException e1) {
+            try {
+                // 尝试传统格式: "yyyy-MM-dd HH:mm:ss"
+                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+                return LocalDateTime.parse(timestampStr, formatter);
+            } catch (DateTimeParseException e2) {
+                logger.warn("无法解析时间戳: {}", timestampStr);
+                return null;
+            }
+        }
+    }
+    
+    /**
      * 将ResultSet映射为AdminUser对象
      */
     private AdminUser mapResultSetToAdminUser(ResultSet rs) throws SQLException {
@@ -194,20 +221,10 @@ public class AdminUserDao {
         user.setSuperAdmin(rs.getBoolean("is_super_admin"));
         user.setActive(rs.getBoolean("is_active"));
         
-        Timestamp createdAt = rs.getTimestamp("created_at");
-        if (createdAt != null) {
-            user.setCreatedAt(createdAt.toLocalDateTime());
-        }
-        
-        Timestamp updatedAt = rs.getTimestamp("updated_at");
-        if (updatedAt != null) {
-            user.setUpdatedAt(updatedAt.toLocalDateTime());
-        }
-        
-        Timestamp lastLoginAt = rs.getTimestamp("last_login_at");
-        if (lastLoginAt != null) {
-            user.setLastLoginAt(lastLoginAt.toLocalDateTime());
-        }
+        // 使用辅助方法解析时间戳,支持多种格式
+        user.setCreatedAt(parseTimestamp(rs.getString("created_at")));
+        user.setUpdatedAt(parseTimestamp(rs.getString("updated_at")));
+        user.setLastLoginAt(parseTimestamp(rs.getString("last_login_at")));
         
         user.setLastLoginIp(rs.getString("last_login_ip"));
         

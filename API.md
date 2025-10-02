@@ -77,13 +77,13 @@ curl -H "X-Admin-Password: your-admin-password" \
 ### 公开端点
 
 以下端点无需 API Token 认证（如果认证被禁用，所有端点都无需认证）：
-- `/api/v1/register` - 用户注册（无需认证，但需要有效的注册令牌）
-- `/api/v1/admin/generate-token` - 生成注册令牌（无需 API Token，但需要管理员密码）
+- `/api/v1/admin/login` - 管理员登录
+- `/api/v1/admin/register` - 管理员注册（需要有效的注册令牌）
 
 **说明：**
-- "公开端点"指的是不需要 API Token 的端点
-- `/api/v1/register` 虽然不需要 API Token，但需要提供有效的注册令牌（token）才能注册
-- `/api/v1/admin/generate-token` 虽然不需要 API Token，但需要通过 `X-Admin-Password` 头提供管理员密码
+- "公开端点"指的是不需要 API Token 或 JWT 认证的端点
+- `/api/v1/admin/login` 使用用户名和密码登录，返回 JWT token
+- `/api/v1/admin/register` 使用注册令牌进行管理员注册
 
 ### 自动生成凭证
 
@@ -126,15 +126,18 @@ auth:
 | `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Token |
 | `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | API Token |
 
-### 用户注册 API
+### 管理员认证 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/register` | POST | 用户注册（使用注册令牌） | 注册令牌 |
-| `/api/v1/admin/generate-token` | POST | 生成注册令牌 | 管理员密码 |
+| `/api/v1/admin/login` | POST | 管理员登录 | 无（公开） |
+| `/api/v1/admin/register` | POST | 管理员注册 | 注册令牌 |
+| `/api/v1/admin/me` | GET | 获取当前管理员信息 | JWT Token |
+| `/api/v1/admin/generate-token` | POST | 生成注册令牌 | JWT Token |
 
 **说明：**
-- `/api/v1/register` 不需要 API Token，但需要在请求体中提供有效的注册令牌（token）
-- `/api/v1/admin/generate-token` 不需要 API Token，但需要在请求头 `X-Admin-Password` 中提供管理员密码
+- `/api/v1/admin/login` 使用用户名和密码登录，返回 JWT token
+- `/api/v1/admin/register` 使用注册令牌进行管理员注册
+- `/api/v1/admin/me` 和 `/api/v1/admin/generate-token` 需要在请求头中提供 `Authorization: Bearer <jwt-token>`
 
 ### 玩家数据查询 API
 | 端点 | 方法 | 描述 | 认证要求 |
@@ -534,11 +537,11 @@ X-Admin-Password: your-admin-password
 
 #### `POST /api/v1/admin/generate-token`
 
-生成注册令牌。
+生成注册令牌(需要管理员JWT认证)。
 
 **请求头：**
 ```http
-X-Admin-Password: your-admin-password
+Authorization: Bearer <jwt-token>
 ```
 
 **请求体：**
@@ -554,9 +557,10 @@ X-Admin-Password: your-admin-password
   "success": true,
   "data": {
     "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
-    "expiryHours": 24
+    "expiryHours": 24,
+    "message": "令牌生成成功"
   },
-  "message": "注册令牌生成成功",
+  "message": "令牌生成成功",
   "timestamp": 1640995200000
 }
 ```

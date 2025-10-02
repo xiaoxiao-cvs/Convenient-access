@@ -50,20 +50,12 @@ public class UserApiController {
     
     /**
      * 处理POST /api/v1/admin/generate-token - 生成注册令牌
+     * 需要JWT认证（从ApiRouter中验证）
      */
     public void handleGenerateToken(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
-            // 验证管理员密码
-            String providedPassword = request.getHeader("X-Admin-Password");
-            if (providedPassword == null || providedPassword.trim().isEmpty()) {
-                sendJsonResponse(response, 401, ApiResponse.unauthorized("缺少管理员密码"));
-                return;
-            }
-            
-            if (adminPassword == null || !adminPassword.equals(providedPassword.trim())) {
-                sendJsonResponse(response, 401, ApiResponse.unauthorized("管理员密码错误"));
-                return;
-            }
+            // JWT认证已经在ApiRouter中完成,这里直接获取当前用户
+            // 如果需要,可以从request.getAttribute("currentUser")获取用户信息
             
             // 读取请求体（可选参数）
             String requestBody = readRequestBody(request);

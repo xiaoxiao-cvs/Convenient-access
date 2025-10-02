@@ -167,6 +167,7 @@ public class WhitelistApiController {
                     long executionTime = System.currentTimeMillis() - startTime;
                     if (success) {
                         // 创建同步任务（使用玩家名）
+                        syncTaskManager.scheduleAddPlayer(null, name);
                         
                         JsonObject result = new JsonObject();
                         result.addProperty("name", name);
@@ -224,6 +225,7 @@ public class WhitelistApiController {
                             long executionTime = System.currentTimeMillis() - startTime;
                             if (success) {
                                 // 创建同步任务
+                                syncTaskManager.scheduleRemovePlayer(uuid, player.getName());
                                 
                                 JsonObject result = new JsonObject();
                                 result.addProperty("uuid", uuid);
@@ -301,6 +303,7 @@ public class WhitelistApiController {
                             if (success) {
                                 // 创建同步任务 - 从JSON文件删除
                                 if (playerUuid != null && !playerUuid.isEmpty()) {
+                                    syncTaskManager.scheduleRemovePlayer(playerUuid, name);
                                 }
                                 // UUID 为 null 时也已经删除了,无需额外同步
                                 
@@ -358,25 +361,54 @@ public class WhitelistApiController {
     
     /**
      * 处理POST /api/v1/whitelist/sync - 手动触发同步
-     * 注意: JSON同步功能已移除,此接口保留仅用于向后兼容
      */
     public void handleTriggerSync(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        JsonObject result = new JsonObject();
-        result.addProperty("message", "JSON同步功能已移除,系统现在使用纯数据库模式");
-        result.addProperty("mode", "database-only");
-        sendJsonResponse(response, 200, ApiResponse.success(result));
+        try {
+            syncTaskManager.scheduleFullSync()
+                .thenAccept(taskId -> {
+                    if (taskId != null && taskId > 0) {
+                        JsonObject result = new JsonObject();
+                        result.addProperty("task_id", taskId);
+                        result.addProperty("message", "同步任务已创建");
+                        sendJsonResponse(response, 200, ApiResponse.success(result));
+                    } else {
+                        logger.warn("同步任务创建失败，返回的taskId: {}", taskId);
+                        sendJsonResponse(response, 500, ApiResponse.error("创建同步任务失败"));
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("触发同步失败", throwable);
+                    sendJsonResponse(response, 500, ApiResponse.error("触发同步失败"));
+                    return null;
+                })
+                .join(); // 等待异步操作完成
+            
+        } catch (Exception e) {
+            logger.error("处理同步请求失败", e);
+            sendJsonResponse(response, 500, ApiResponse.error("服务器内部错误"));
+        }
     }
     
     /**
      * 处理GET /api/v1/whitelist/sync/status - 获取同步状态
-     * 注意: JSON同步功能已移除,此接口保留仅用于向后兼容
      */
     public void handleGetSyncStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        JsonObject status = new JsonObject();
-        status.addProperty("mode", "database-only");
-        status.addProperty("json_sync", "disabled");
-        status.addProperty("message", "系统运行在纯数据库模式");
-        sendJsonResponse(response, 200, ApiResponse.success(status));
+        try {
+            syncTaskManager.getSyncStatus()
+                .thenAccept(status -> {
+                    sendJsonResponse(response, 200, ApiResponse.success(status));
+                })
+                .exceptionally(throwable -> {
+                    logger.error("获取同步状态失败", throwable);
+                    sendJsonResponse(response, 500, ApiResponse.error("获取同步状态失败"));
+                    return null;
+                })
+                .join(); // 等待异步操作完成
+            
+        } catch (Exception e) {
+            logger.error("处理同步状态请求失败", e);
+            sendJsonResponse(response, 500, ApiResponse.error("服务器内部错误"));
+        }
     }
     
     /**
@@ -523,6 +555,7 @@ public class WhitelistApiController {
                     .thenAccept(result -> {
                         // 创建同步任务
                         if (result.getSuccessCount() > 0) {
+                            syncTaskManager.createTask(SyncTask.TaskType.BATCH_UPDATE, "{\"operation\":\"batch_add\"}", 2);
                         }
                         
                         JsonObject responseData = new JsonObject();
@@ -578,6 +611,7 @@ public class WhitelistApiController {
                     .thenAccept(result -> {
                         // 创建同步任务
                         if (result.getSuccessCount() > 0) {
+                            syncTaskManager.createTask(SyncTask.TaskType.BATCH_UPDATE, "{\"operation\":\"batch_remove\"}", 2);
                         }
                         
                         JsonObject responseData = new JsonObject();

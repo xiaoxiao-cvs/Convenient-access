@@ -8,13 +8,14 @@ import org.slf4j.LoggerFactory;
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
 import com.xaoxiao.convenientaccess.api.AdminAuthController;
 import com.xaoxiao.convenientaccess.api.ApiRouter;
+import com.xaoxiao.convenientaccess.api.OperationLogApiController;
 import com.xaoxiao.convenientaccess.api.PlayerDataApiController;
 import com.xaoxiao.convenientaccess.api.UserApiController;
 import com.xaoxiao.convenientaccess.api.WhitelistApiController;
 import com.xaoxiao.convenientaccess.auth.InitialPasswordGenerator;
 import com.xaoxiao.convenientaccess.auth.RegistrationTokenManager;
 import com.xaoxiao.convenientaccess.database.DatabaseManager;
-import com.xaoxiao.convenientaccess.sync.SyncTaskManager;
+import com.xaoxiao.convenientaccess.operation.OperationLogDao;
 
 /**
  * 白名单管理系统主类（简化版）
@@ -28,7 +29,6 @@ public class WhitelistSystem {
     // 核心组件
     private DatabaseManager databaseManager;
     private WhitelistManager whitelistManager;
-    private SyncTaskManager syncTaskManager;
     private RegistrationTokenManager registrationTokenManager;
     private InitialPasswordGenerator passwordGenerator;
     
@@ -66,15 +66,11 @@ public class WhitelistSystem {
                     throw new RuntimeException("白名单管理器初始化失败");
                 }
                 
-                // 初始化同步任务管理器
-                syncTaskManager = new SyncTaskManager(plugin, databaseManager);
-                boolean syncInit = syncTaskManager.initialize().get();
-                if (!syncInit) {
-                    throw new RuntimeException("同步任务管理器初始化失败");
-                }
-                
                 // 初始化注册令牌管理器
                 registrationTokenManager = new RegistrationTokenManager(databaseManager);
+                
+                // 初始化操作日志DAO
+                OperationLogDao operationLogDao = new OperationLogDao(databaseManager);
                 
                 // 检查配置文件中是否已有管理员密码
                 String existingPassword = plugin.getConfigManager().getAdminPassword();
@@ -93,9 +89,10 @@ public class WhitelistSystem {
                 }
                 
                 // 初始化API组件
-                whitelistApiController = new WhitelistApiController(whitelistManager, syncTaskManager);
+                whitelistApiController = new WhitelistApiController(whitelistManager, operationLogDao);
                 userApiController = new UserApiController(registrationTokenManager, whitelistManager);
                 PlayerDataApiController playerDataApiController = new PlayerDataApiController(plugin);
+                OperationLogApiController operationLogApiController = new OperationLogApiController(operationLogDao);
                 
                 // 设置管理员密码到UserApiController
                 userApiController.setAdminPassword(adminPassword);
@@ -103,7 +100,8 @@ public class WhitelistSystem {
                 // 初始化管理员认证控制器（需要在主插件初始化AdminAuthService后获取）
                 AdminAuthController adminAuthController = null;
                 
-                apiRouter = new ApiRouter(whitelistApiController, userApiController, playerDataApiController, adminAuthController, plugin.getConfigManager());
+                apiRouter = new ApiRouter(whitelistApiController, userApiController, playerDataApiController, 
+                                        operationLogApiController, adminAuthController, plugin.getConfigManager());
                 
                 initialized = true;
                 logger.info("白名单管理系统（简化版）初始化完成");
@@ -123,11 +121,6 @@ public class WhitelistSystem {
         logger.info("正在关闭白名单管理系统...");
         
         try {
-            // 关闭同步任务管理器
-            if (syncTaskManager != null) {
-                syncTaskManager.shutdown();
-            }
-            
             // 关闭数据库管理器
             if (databaseManager != null) {
                 databaseManager.shutdown();
@@ -147,10 +140,6 @@ public class WhitelistSystem {
     
     public WhitelistManager getWhitelistManager() {
         return whitelistManager;
-    }
-    
-    public SyncTaskManager getSyncTaskManager() {
-        return syncTaskManager;
     }
     
     public RegistrationTokenManager getRegistrationTokenManager() {

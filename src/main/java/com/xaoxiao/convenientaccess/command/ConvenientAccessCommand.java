@@ -378,11 +378,8 @@ public class ConvenientAccessCommand implements CommandExecutor, TabCompleter {
     }
     
     private void handleWhitelistSync(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "正在触发白名单同步...");
-        
-        // 触发全量同步
-        plugin.getWhitelistSystem().getSyncTaskManager().scheduleFullSync();
-        sender.sendMessage(ChatColor.GREEN + "✓ 同步任务已提交，请稍后查看同步结果");
+        sender.sendMessage(ChatColor.YELLOW + "JSON同步功能已移除");
+        sender.sendMessage(ChatColor.GREEN + "✓ 系统现在使用纯数据库模式，无需手动同步");
     }
     
     private void showHelp(CommandSender sender) {

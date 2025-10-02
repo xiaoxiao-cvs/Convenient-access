@@ -11,6 +11,8 @@
 - **智能同步机制** - 数据库与JSON文件双向同步，支持冲突解决
 - **实时统计信息** - 白名单数量、操作历史、同步状态等
 - **玩家数据查询** - 获取玩家完整数据，包括位置、背包、装备、统计等
+- **操作日志系统** - 记录所有白名单操作,包括操作者、时间、请求数据、执行时间等
+- **数据迁移工具** - 从WhitelistPlus等插件迁移数据,保留完整的添加人信息
 
 ### 多层安全认证
 - **API密钥认证** - 基础API访问控制
@@ -241,6 +243,12 @@ curl -H "X-API-Key: your-api-key" \
 - `/ca admin list` - 显示管理员列表
 - `/ca admin create <username> <password> [role]` - 创建管理员账户
 - `/ca admin sessions` - 显示活跃会话
+
+### 数据迁移命令
+- `/ca-migrate <json_file_path>` - 从JSON文件迁移addedBy信息到数据库
+  - 示例: `/ca-migrate whitelist.json`
+  - 用途: 从WhitelistPlus迁移数据,恢复玩家添加人信息
+  - 特性: 异步执行,不删除现有数据,只更新SYSTEM添加人
 
 ## 权限
 
