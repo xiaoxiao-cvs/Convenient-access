@@ -565,19 +565,15 @@ X-Admin-Password: your-admin-password
 
 #### `POST /api/v1/register`
 
-用户注册（使用注册令牌）。
+用户自助注册白名单。
 
-> **🎯 改进**：现在注册只需要玩家名和令牌，UUID会在首次登录时自动补充！
+**用途说明**：
+- 这是一个让用户**自助添加到白名单**的功能
+- 用户需要从管理员处获取注册令牌（鉴权码）
+- 用户使用 **玩家名称（账号）** + **UUID（密码）** + **注册令牌（鉴权码）** 来注册
+- 注册成功后,用户的玩家名称和UUID将被添加到服务器白名单
 
 **请求体：**
-```json
-{
-  "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
-  "playerName": "PlayerName"
-}
-```
-
-**可选参数：**
 ```json
 {
   "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -586,15 +582,20 @@ X-Admin-Password: your-admin-password
 }
 ```
 
-**响应示例（无UUID）：**
+**参数说明：**
+- `token` (必需): 注册令牌，由管理员生成的鉴权码
+- `playerName` (必需): 玩家的 Minecraft 游戏名称（账号）
+- `playerUuid` (必需): 玩家的 Minecraft UUID（密码）
+
+**响应示例：**
 ```json
 {
   "success": true,
   "message": "注册成功",
   "data": {
     "playerName": "PlayerName",
-    "uuid_pending": true,
-    "message": "注册成功，已添加到白名单。UUID将在首次登录时自动补充"
+    "playerUuid": "550e8400-e29b-41d4-a716-446655440000",
+    "message": "注册成功，已添加到白名单"
   },
   "timestamp": 1640995200000
 }

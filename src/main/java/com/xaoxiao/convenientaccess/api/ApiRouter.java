@@ -22,14 +22,24 @@ public class ApiRouter extends HttpServlet {
     private final WhitelistApiController whitelistController;
     private final UserApiController userController;
     private final PlayerDataApiController playerDataController;
+    private AdminAuthController adminAuthController;
     private final ConfigManager configManager;
     
     public ApiRouter(WhitelistApiController whitelistController, UserApiController userController, 
-                     PlayerDataApiController playerDataController, ConfigManager configManager) {
+                     PlayerDataApiController playerDataController, AdminAuthController adminAuthController,
+                     ConfigManager configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
         this.playerDataController = playerDataController;
+        this.adminAuthController = adminAuthController;
         this.configManager = configManager;
+    }
+    
+    /**
+     * 设置管理员认证控制器（用于延迟初始化）
+     */
+    public void setAdminAuthController(AdminAuthController adminAuthController) {
+        this.adminAuthController = adminAuthController;
     }
     
     /**
@@ -46,15 +56,28 @@ public class ApiRouter extends HttpServlet {
             return true;
         }
         
-        // 检查API Token
-        String apiKey = request.getHeader("X-API-Key");
-        if (apiKey == null) {
-            apiKey = request.getHeader("Authorization");
-            if (apiKey != null && apiKey.startsWith("Bearer ")) {
-                apiKey = apiKey.substring(7);
+        // 检查JWT Token (用于管理员已登录的请求)
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String jwtToken = authHeader.substring(7);
+            // 验证JWT token
+            if (adminAuthController != null) {
+                try {
+                    com.xaoxiao.convenientaccess.auth.AdminUser user = 
+                        adminAuthController.getAdminAuthService().validateToken(jwtToken);
+                    if (user != null) {
+                        // JWT token 有效
+                        request.setAttribute("currentUser", user);
+                        return true;
+                    }
+                } catch (Exception e) {
+                    logger.debug("JWT token validation failed: {}", e.getMessage());
+                }
             }
         }
         
+        // 检查API Token (用于非管理员的API访问)
+        String apiKey = request.getHeader("X-API-Key");
         if (apiKey != null) {
             String validToken = configManager.getApiToken();
             if (validToken != null && validToken.equals(apiKey)) {
@@ -62,7 +85,7 @@ public class ApiRouter extends HttpServlet {
             }
         }
         
-        // 对于管理员端点，检查管理员密码
+        // 对于管理员端点,检查管理员密码 (用于生成注册token等操作)
         if (isAdminEndpoint(path)) {
             String adminPassword = request.getHeader("X-Admin-Password");
             if (adminPassword != null) {
@@ -78,7 +101,8 @@ public class ApiRouter extends HttpServlet {
      * 判断是否为公开端点（不需要认证）
      */
     private boolean isPublicEndpoint(String path) {
-        return path.equals("/api/v1/register") || 
+        return path.equals("/api/v1/admin/login") || 
+               path.equals("/api/v1/admin/register") ||
                path.equals("/api/v1/admin/generate-token");
     }
     
@@ -149,6 +173,14 @@ public class ApiRouter extends HttpServlet {
             else if (path.equals("/api/v1/player")) {
                 playerDataController.handleGetPlayerData(request, response);
             }
+            // 管理员信息查询路由
+            else if (path.equals("/api/v1/admin/me")) {
+                if (adminAuthController != null) {
+                    adminAuthController.handleGetCurrentUser(request, response);
+                } else {
+                    send503Response(response, "Admin authentication service not available");
+                }
+            }
             else {
                 send404Response(response, "API endpoint not found");
             }
@@ -188,9 +220,20 @@ public class ApiRouter extends HttpServlet {
                      send404Response(response, "Endpoint not found");
                  }
              }
-             // 用户注册路由
-             else if (path.equals("/api/v1/register")) {
-                 userController.handleRegister(request, response);
+             // 管理员认证路由
+             else if (path.equals("/api/v1/admin/login")) {
+                 if (adminAuthController != null) {
+                     adminAuthController.handleLogin(request, response);
+                 } else {
+                     send503Response(response, "Admin authentication service not available");
+                 }
+             }
+             else if (path.equals("/api/v1/admin/register")) {
+                 if (adminAuthController != null) {
+                     adminAuthController.handleRegister(request, response);
+                 } else {
+                     send503Response(response, "Admin authentication service not available");
+                 }
              }
              // 令牌生成路由（简化版，需要管理员密码验证）
              else if (path.equals("/api/v1/admin/generate-token")) {
@@ -307,6 +350,19 @@ public class ApiRouter extends HttpServlet {
         
         String jsonResponse = String.format(
             "{\"success\": false, \"error\": {\"code\": 500, \"message\": \"%s\"}, \"timestamp\": %d}",
+            message, System.currentTimeMillis()
+        );
+        
+        response.getWriter().write(jsonResponse);
+    }
+    
+    private void send503Response(HttpServletResponse response, String message) throws IOException {
+        response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        
+        String jsonResponse = String.format(
+            "{\"success\": false, \"error\": {\"code\": 503, \"message\": \"%s\"}, \"timestamp\": %d}",
             message, System.currentTimeMillis()
         );
         

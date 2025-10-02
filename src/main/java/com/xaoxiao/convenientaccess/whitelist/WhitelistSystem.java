@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.xaoxiao.convenientaccess.ConvenientAccessPlugin;
+import com.xaoxiao.convenientaccess.api.AdminAuthController;
 import com.xaoxiao.convenientaccess.api.ApiRouter;
 import com.xaoxiao.convenientaccess.api.PlayerDataApiController;
 import com.xaoxiao.convenientaccess.api.UserApiController;
@@ -99,7 +100,10 @@ public class WhitelistSystem {
                 // 设置管理员密码到UserApiController
                 userApiController.setAdminPassword(adminPassword);
                 
-                apiRouter = new ApiRouter(whitelistApiController, userApiController, playerDataApiController, plugin.getConfigManager());
+                // 初始化管理员认证控制器（需要在主插件初始化AdminAuthService后获取）
+                AdminAuthController adminAuthController = null;
+                
+                apiRouter = new ApiRouter(whitelistApiController, userApiController, playerDataApiController, adminAuthController, plugin.getConfigManager());
                 
                 initialized = true;
                 logger.info("白名单管理系统（简化版）初始化完成");
@@ -167,6 +171,18 @@ public class WhitelistSystem {
     
     public String getAdminPassword() {
         return adminPassword;
+    }
+    
+    /**
+     * 设置管理员认证控制器到ApiRouter
+     * @param adminAuthService 管理员认证服务
+     */
+    public void setAdminAuthController(com.xaoxiao.convenientaccess.auth.AdminAuthService adminAuthService) {
+        if (apiRouter != null && adminAuthService != null) {
+            AdminAuthController adminAuthController = new AdminAuthController(adminAuthService);
+            apiRouter.setAdminAuthController(adminAuthController);
+            logger.info("管理员认证控制器已设置到ApiRouter");
+        }
     }
     
     /**

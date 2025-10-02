@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.xaoxiao.convenientaccess.api.ApiManager;
+import com.xaoxiao.convenientaccess.auth.AdminAuthService;
 import com.xaoxiao.convenientaccess.backup.BackupManager;
 import com.xaoxiao.convenientaccess.cache.CacheManager;
 import com.xaoxiao.convenientaccess.command.ConvenientAccessCommand;
@@ -30,6 +31,9 @@ public class ConvenientAccessPlugin extends JavaPlugin {
     
     // 备份管理器
     private BackupManager backupManager;
+    
+    // 管理员认证服务
+    private AdminAuthService adminAuthService;
     
     @Override
     public void onEnable() {
@@ -68,6 +72,23 @@ public class ConvenientAccessPlugin extends JavaPlugin {
                         this
                     );
                     logger.info("白名单监听器已注册");
+                    
+                    // 初始化管理员认证服务
+                    try {
+                        adminAuthService = new AdminAuthService(
+                            whitelistSystem.getDatabaseManager(),
+                            whitelistSystem.getRegistrationTokenManager(),
+                            configManager.getAdminPassword()
+                        );
+                        // 确保超级管理员账户存在
+                        adminAuthService.ensureSuperAdminExists();
+                        logger.info("管理员认证服务启动成功");
+                        
+                        // 将管理员认证控制器设置到ApiRouter
+                        whitelistSystem.setAdminAuthController(adminAuthService);
+                    } catch (Exception e) {
+                        logger.error("管理员认证服务启动失败", e);
+                    }
                     
                     // 在白名单系统初始化完成后启动HTTP服务器
                     if (configManager.isHttpEnabled()) {
@@ -164,6 +185,10 @@ public class ConvenientAccessPlugin extends JavaPlugin {
     
     public BackupManager getBackupManager() {
         return backupManager;
+    }
+    
+    public AdminAuthService getAdminAuthService() {
+        return adminAuthService;
     }
     
     /**
