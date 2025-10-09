@@ -12,5 +12,5 @@ CREATE TABLE IF NOT EXISTS operation_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- 约束
-    CONSTRAINT chk_operation_type CHECK (operation_type IN ('ADD', 'REMOVE', 'QUERY', 'BATCH_ADD', 'BATCH_REMOVE', 'SYNC'))
+    CONSTRAINT chk_operation_type CHECK (operation_type IN ('ADD', 'REMOVE', 'QUERY', 'BATCH_ADD', 'BATCH_REMOVE', 'SYNC', 'UNAUTHORIZED_ACCESS'))
 );

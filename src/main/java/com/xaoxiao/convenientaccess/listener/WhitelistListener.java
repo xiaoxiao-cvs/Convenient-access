@@ -213,11 +213,41 @@ public class WhitelistListener implements Listener {
     private void logUnauthorizedAccess(String playerName, String playerUuid, String ipAddress) {
         logger.warn("未授权访问尝试 - 玩家: {} ({}), IP: {}", playerName, playerUuid, ipAddress);
         
-        // TODO: 可以扩展为写入数据库操作日志
-        // plugin.getDatabaseManager().executeAsync(connection -> {
-        //     // 插入操作日志
-        //     return null;
-        // });
+        // 异步写入数据库操作日志
+        plugin.getWhitelistSystem().getDatabaseManager().executeAsync(connection -> {
+            try {
+                String sql = """
+                    INSERT INTO operation_log 
+                    (operation_type, target_uuid, target_name, operator_ip, operator_agent, 
+                     request_data, response_status, execution_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """;
+                
+                try (var pstmt = connection.prepareStatement(sql)) {
+                    pstmt.setString(1, "UNAUTHORIZED_ACCESS");
+                    pstmt.setString(2, playerUuid);
+                    pstmt.setString(3, playerName);
+                    pstmt.setString(4, ipAddress);
+                    pstmt.setString(5, "Minecraft Client"); // 游戏客户端
+                    pstmt.setString(6, String.format("{\"reason\":\"not_in_whitelist\",\"player\":\"%s\",\"uuid\":\"%s\"}", 
+                                                     playerName, playerUuid));
+                    pstmt.setInt(7, 403); // HTTP 403 Forbidden 表示拒绝访问
+                    pstmt.setLong(8, 0); // 不需要记录执行时间
+                    
+                    int affected = pstmt.executeUpdate();
+                    if (affected > 0) {
+                        logger.info("✅ 已记录未授权访问日志: {} ({})", playerName, ipAddress);
+                    } else {
+                        logger.warn("❌ 记录未授权访问日志失败: {}", playerName);
+                    }
+                }
+                
+                return null;
+            } catch (java.sql.SQLException e) {
+                logger.error("记录未授权访问日志时发生SQL异常: {} ({})", playerName, ipAddress, e);
+                return null;
+            }
+        });
     }
     
     /**

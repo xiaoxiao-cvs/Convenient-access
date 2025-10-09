@@ -62,3 +62,5 @@ usernamecache.json
 
 # Keep the built plugin JAR for distribution
 !target/convenient-access-*.jar
+
+/.VSCodeCounter
