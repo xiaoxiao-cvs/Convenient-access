@@ -64,3 +64,4 @@ usernamecache.json
 !target/convenient-access-*.jar
 
 /.VSCodeCounter
+/docs
