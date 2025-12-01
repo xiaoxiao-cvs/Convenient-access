@@ -69,11 +69,13 @@ public class WhitelistApiController {
     }
     
     /**
-     * 处理GET /api/v1/whitelist - 返回所有白名单数据（前端处理分页）
+     * 处理GET /api/v1/whitelist - 返回白名单数据（支持分页）
      */
     public void handleGetWhitelist(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
-            // 忽略分页参数，返回所有数据
+            // 解析分页参数
+            String pageStr = request.getParameter("page");
+            String sizeStr = request.getParameter("size");
             String search = request.getParameter("search");
             String source = request.getParameter("source");
             String addedBy = request.getParameter("added_by");
@@ -82,9 +84,9 @@ public class WhitelistApiController {
             String startDate = request.getParameter("start_date");
             String endDate = request.getParameter("end_date");
             
-            // 使用一个很大的size值来获取所有数据
-            final int page = 1;
-            final int size = 999999; // 足够大的值来获取所有记录
+            // 使用前端传入的分页参数，默认值：page=1, size=20
+            final int page = (pageStr != null && !pageStr.isEmpty()) ? Integer.parseInt(pageStr) : 1;
+            final int size = (sizeStr != null && !sizeStr.isEmpty()) ? Integer.parseInt(sizeStr) : 20;
             
             // 使用现有的分页查询方法，但获取所有数据
             whitelistManager.getWhitelistPaginated(page, size, search, source, addedBy, sort, order, startDate, endDate)
