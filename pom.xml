@@ -27,6 +27,11 @@
             <id>sonatype</id>
             <url>https://oss.sonatype.org/content/groups/public/</url>
         </repository>
+        <!-- Spark API 仓库 -->
+        <repository>
+            <id>luck-repo</id>
+            <url>https://repo.lucko.me/</url>
+        </repository>
     </repositories>
 
     <dependencies>
