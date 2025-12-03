@@ -147,6 +147,7 @@ public class HttpServer {
             return path.startsWith("/api/v1/whitelist") || 
                    path.startsWith("/api/v1/admin") ||
                    path.startsWith("/api/v1/register") ||
+                   path.startsWith("/api/v1/logs") ||
                    path.equals("/api/v1/player");
         }
         
