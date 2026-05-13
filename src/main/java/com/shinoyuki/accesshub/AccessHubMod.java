@@ -11,6 +11,7 @@ import com.shinoyuki.accesshub.api.WhitelistApiController;
 import com.shinoyuki.accesshub.auth.AdminAuthService;
 import com.shinoyuki.accesshub.auth.LoginAttemptService;
 import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
+import com.shinoyuki.accesshub.command.AccessHubCommand;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.config.AccessHubConfigImpl;
 import com.shinoyuki.accesshub.database.DatabaseManager;
@@ -20,6 +21,7 @@ import com.shinoyuki.accesshub.operation.OperationLogDao;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -143,5 +145,25 @@ public final class AccessHubMod {
             LOGGER.warn("AccessHub 关闭时发生异常", e);
         }
         LOGGER.info("AccessHub 已关闭");
+    }
+
+    @SubscribeEvent
+    public void onRegisterCommands(RegisterCommandsEvent event) {
+        AccessHubCommand.register(event.getDispatcher(), this);
+        LOGGER.info("AccessHub 命令已注册: /accesshub (alias: /ca /ahub)");
+    }
+
+    /**
+     * 暴露给命令层使用. mod 启动失败时返回 null, 命令实现负责 null 防御并提示用户.
+     */
+    public AccessHubConfig getConfig() {
+        return config;
+    }
+
+    /**
+     * 暴露给命令层使用. mod 启动失败或 http 被配置禁用时返回 null.
+     */
+    public HttpServer getHttpServer() {
+        return httpServer;
     }
 }
