@@ -10,7 +10,7 @@ import org.slf4j.Logger;
 
 @Mod(AccessHubMod.MOD_ID)
 public final class AccessHubMod {
-    public static final String MOD_ID = "accesshub";
+    public static final String MOD_ID = "shinoyuki_accesshub";
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
