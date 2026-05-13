@@ -14,6 +14,7 @@ import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.config.AccessHubConfigImpl;
 import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.event.PlayerLoginListener;
 import com.shinoyuki.accesshub.http.HttpServer;
 import com.shinoyuki.accesshub.operation.OperationLogDao;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
@@ -118,6 +119,14 @@ public final class AccessHubMod {
         } else {
             LOGGER.info("HTTP 服务器在配置中已禁用, 跳过启动");
         }
+
+        // 8. 玩家登录监听器 (PreLogin 阶段拦截未在白名单的玩家)
+        // 注册到 EVENT_BUS, 实例持有 config / whitelistManager / databaseManager 依赖.
+        // 不放进 mod 启动早期是因为它依赖 whitelistManager 已初始化完成 (步骤 4).
+        PlayerLoginListener loginListener = new PlayerLoginListener(
+                config, whitelistManager, databaseManager);
+        MinecraftForge.EVENT_BUS.register(loginListener);
+        LOGGER.info("白名单登录监听器已注册到事件总线");
     }
 
     @SubscribeEvent
