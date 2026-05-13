@@ -87,6 +87,7 @@ public class ConvenientAccessPlugin extends JavaPlugin {
                             whitelistSystem.getDatabaseManager(),
                             whitelistSystem.getRegistrationTokenManager(),
                             configManager.getAdminPassword(),
+                            configManager.getJwtSecret(),
                             loginAttemptService
                         );
                         // 确保超级管理员账户存在
@@ -235,11 +236,11 @@ public class ConvenientAccessPlugin extends JavaPlugin {
     }
     
     /**
-     * 初始化认证配置（自动生成密码和Token）
+     * 初始化认证配置（自动生成密码、Token 和 JWT 签名密钥）
      */
     private void initializeAuthConfig() {
         boolean configChanged = false;
-        
+
         // 检查并生成管理员密码
         String adminPassword = configManager.getAdminPassword();
         if (adminPassword == null || adminPassword.trim().isEmpty()) {
@@ -252,7 +253,7 @@ public class ConvenientAccessPlugin extends JavaPlugin {
         } else {
             logger.info("使用配置文件中的管理员密码");
         }
-        
+
         // 检查并生成API Token
         String apiToken = configManager.getApiToken();
         if (apiToken == null || apiToken.trim().isEmpty()) {
@@ -265,42 +266,63 @@ public class ConvenientAccessPlugin extends JavaPlugin {
         } else {
             logger.info("使用配置文件中的API令牌");
         }
-        
+
+        // 检查并生成 JWT 签名密钥（与 admin password 完全独立，防止密码泄漏导致 token 伪造）
+        String jwtSecret = configManager.getJwtSecret();
+        if (jwtSecret == null || jwtSecret.trim().isEmpty()) {
+            String newSecret = generateJwtSecret();
+            configManager.setJwtSecret(newSecret);
+            configChanged = true;
+            logger.info("已自动生成 JWT 签名密钥 (256 位)");
+            logger.warn("JWT 密钥已写入 config.yml，请妥善保管。修改此值会让所有已签发的 token 失效");
+        } else {
+            logger.info("使用配置文件中的 JWT 签名密钥");
+        }
+
         if (configChanged) {
             logger.info("认证配置已更新并保存到配置文件");
         }
     }
-    
+
     /**
-     * 生成随机密码
+     * 生成随机密码 (使用密码学安全的 SecureRandom)
      */
     private String generateRandomPassword(int length) {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         StringBuilder sb = new StringBuilder();
-        java.util.Random random = new java.util.Random();
-        
+        java.security.SecureRandom random = new java.security.SecureRandom();
+
         for (int i = 0; i < length; i++) {
             sb.append(chars.charAt(random.nextInt(chars.length())));
         }
-        
+
         return sb.toString();
     }
-    
+
     /**
-     * 生成API Token（sk-开头的64位token）
+     * 生成API Token（sk-开头的64位token, 使用 SecureRandom）
      */
     private String generateApiToken() {
         String prefix = configManager.getTokenPrefix();
         String tokenChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         StringBuilder sb = new StringBuilder(prefix);
-        java.util.Random random = new java.util.Random();
-        
+        java.security.SecureRandom random = new java.security.SecureRandom();
+
         // 生成64位token（包含前缀）
         int tokenLength = 64 - prefix.length();
         for (int i = 0; i < tokenLength; i++) {
             sb.append(tokenChars.charAt(random.nextInt(tokenChars.length())));
         }
-        
+
         return sb.toString();
+    }
+
+    /**
+     * 生成 JWT 签名密钥：32 字节 (256 位) 密码学随机数, base64 编码
+     */
+    private String generateJwtSecret() {
+        byte[] bytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(bytes);
+        return java.util.Base64.getEncoder().encodeToString(bytes);
     }
 }

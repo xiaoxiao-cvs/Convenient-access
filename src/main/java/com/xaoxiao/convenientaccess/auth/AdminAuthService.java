@@ -19,18 +19,19 @@ public class AdminAuthService {
     private final RegistrationTokenManager tokenManager;
     private final LoginAttemptService loginAttemptService;
     private final String systemAdminPassword;
-    
-    public AdminAuthService(DatabaseManager dbManager, RegistrationTokenManager tokenManager, 
-                           String systemAdminPassword, LoginAttemptService loginAttemptService) {
+
+    public AdminAuthService(DatabaseManager dbManager, RegistrationTokenManager tokenManager,
+                           String systemAdminPassword, String jwtSecret,
+                           LoginAttemptService loginAttemptService) {
         this.adminUserDao = new AdminUserDao(dbManager);
         this.authLogDao = new AuthLogDao(dbManager);
         this.tokenManager = tokenManager;
         this.loginAttemptService = loginAttemptService;
         this.systemAdminPassword = systemAdminPassword;
-        
-        // 初始化JWT密钥
-        JwtUtil.initialize(systemAdminPassword);
-        
+
+        // 初始化 JWT 密钥（与 admin password 完全独立，避免密码泄漏导致 token 可伪造）
+        JwtUtil.initialize(jwtSecret);
+
         // 确保超级管理员账号存在
         ensureSuperAdminExists();
     }

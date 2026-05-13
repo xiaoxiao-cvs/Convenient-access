@@ -128,6 +128,21 @@ public class ConfigManager {
     public String getTokenPrefix() {
         return config.getString("api.auth.token-prefix", "sk-");
     }
+
+    /**
+     * 获取JWT签名密钥（base64 编码的 256 位随机串）
+     */
+    public String getJwtSecret() {
+        return config.getString("api.auth.jwt-secret", "");
+    }
+
+    /**
+     * 设置JWT签名密钥到配置文件
+     */
+    public void setJwtSecret(String secret) {
+        config.set("api.auth.jwt-secret", secret);
+        plugin.saveConfig();
+    }
     
     /**
      * 获取管理员密码

@@ -329,36 +329,52 @@ public class WhitelistManager {
         if (playerName == null || playerName.trim().isEmpty()) {
             return CompletableFuture.completedFuture(false);
         }
-        
-        // 先检查 UUID（如果有效）
-        if (isValidUuid(uuid)) {
-            if (cacheLoaded && cache.containsKey(uuid)) {
+
+        if (cacheLoaded) {
+            // 先按 UUID 查缓存
+            if (isValidUuid(uuid)) {
                 WhitelistEntry entry = cache.get(uuid);
                 if (entry != null && entry.isActive()) {
                     return CompletableFuture.completedFuture(true);
                 }
             }
+            // 再按名字查缓存 — 覆盖 UUID 待补充的条目，以及通过 name 索引命中的路径
+            // 命中缓存可避免 PreLogin 阶段去抢 8 线程的异步池（这是幽灵踢人的主要诱因）
+            WhitelistEntry byName = cache.get("name:" + playerName.trim().toLowerCase());
+            if (byName != null && byName.isActive()) {
+                return CompletableFuture.completedFuture(true);
+            }
         }
-        
-        // 查询数据库 - 同时检查用户名和UUID
+
+        // 查询数据库 - 同时检查用户名和UUID。SELECT * 是为了查到后能回填缓存
         return databaseManager.executeAsync(connection -> {
             String sql = """
-                SELECT is_active FROM whitelist 
-                WHERE (LOWER(name) = LOWER(?) OR uuid = ?) 
+                SELECT * FROM whitelist
+                WHERE (LOWER(name) = LOWER(?) OR uuid = ?)
                 AND is_active = 1
                 LIMIT 1
             """;
-            
+
             try (PreparedStatement stmt = connection.prepareStatement(sql)) {
                 stmt.setString(1, playerName.trim());
                 stmt.setString(2, uuid);
-                
+
                 try (ResultSet rs = stmt.executeQuery()) {
-                    boolean found = rs.next();
-                    if (found) {
-                        logger.info("离线模式白名单匹配: 玩家 {} (UUID: {}) 已在白名单中", playerName, uuid);
+                    if (!rs.next()) {
+                        return false;
                     }
-                    return found;
+                    WhitelistEntry entry = mapResultSetToEntry(rs);
+                    // 回填缓存，下次同样查询走内存，避免再去抢异步线程池
+                    if (cacheLoaded) {
+                        if (entry.getUuid() != null) {
+                            cache.put(entry.getUuid(), entry);
+                        }
+                        if (entry.getName() != null) {
+                            cache.put("name:" + entry.getName().toLowerCase(), entry);
+                        }
+                    }
+                    logger.info("离线模式白名单匹配: 玩家 {} (UUID: {}) 已在白名单中", playerName, uuid);
+                    return true;
                 }
             }
         }).exceptionally(throwable -> {
@@ -634,23 +650,31 @@ public class WhitelistManager {
     
     /**
      * 加载缓存
+     *
+     * Why: 旧实现只把有 UUID 的条目以 UUID 为 key 写入缓存，导致两个后果:
+     * 1. UUID 留空的条目（通过 admin 面板按名字加入、待玩家首次登录时补 UUID）完全不进缓存
+     * 2. 即使有 UUID 也只能按 UUID 命中 — isPlayerWhitelistedOffline 在按名字查询时拿不到缓存
+     * 这增加了 DB 查询压力，叠加 8 线程池排队后，PreLogin 容易超时被严格模式踢人。
      */
     private CompletableFuture<Boolean> loadCache() {
         return databaseManager.executeAsync(connection -> {
             String sql = "SELECT * FROM whitelist WHERE is_active = 1";
-            
+
             try (Statement stmt = connection.createStatement();
                  ResultSet rs = stmt.executeQuery(sql)) {
-                
+
                 cache.clear();
                 while (rs.next()) {
                     WhitelistEntry entry = mapResultSetToEntry(rs);
-                    // 只缓存有 UUID 的条目，UUID 待补充的条目不放入缓存
                     if (entry.getUuid() != null) {
                         cache.put(entry.getUuid(), entry);
                     }
+                    // 同时按名字索引，覆盖 UUID 待补充的条目以及按名字查询的路径
+                    if (entry.getName() != null) {
+                        cache.put("name:" + entry.getName().toLowerCase(), entry);
+                    }
                 }
-                
+
                 cacheLoaded = true;
                 return true;
             }

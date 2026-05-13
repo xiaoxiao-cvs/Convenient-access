@@ -27,6 +27,9 @@ api:
     api-token: ""
     # 令牌前缀（不建议修改）
     token-prefix: "sk-"
+    # JWT 签名密钥（首次启动时自动生成 base64 编码的 256 位强随机密钥）
+    # 警告: 修改此值会导致所有已签发的 JWT token 立即失效
+    jwt-secret: ""
     # 登录失败限制 (防止暴力破解)
     login-attempt-limit:
       # 是否启用登录失败限制

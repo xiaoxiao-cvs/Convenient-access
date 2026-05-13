@@ -78,42 +78,29 @@ public class ApiRouter extends HttpServlet {
             }
         }
         
-        // 检查API Token (用于非管理员的API访问)
+        // 检查API Token (用于非管理员的API访问，constant-time 比较防 timing attack)
         String apiKey = request.getHeader("X-API-Key");
         if (apiKey != null) {
             String validToken = configManager.getApiToken();
-            if (validToken != null && validToken.equals(apiKey)) {
+            if (validToken != null && !validToken.isEmpty()
+                    && java.security.MessageDigest.isEqual(
+                            validToken.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
                 return true;
             }
         }
-        
-        // 对于管理员端点,检查管理员密码 (用于生成注册token等操作)
-        if (isAdminEndpoint(path)) {
-            String adminPassword = request.getHeader("X-Admin-Password");
-            if (adminPassword != null) {
-                String validPassword = configManager.getAdminPassword();
-                return validPassword != null && validPassword.equals(adminPassword);
-            }
-        }
-        
+
         return false;
     }
-    
+
     /**
      * 判断是否为公开端点（不需要认证）
      */
     private boolean isPublicEndpoint(String path) {
-        return path.equals("/api/v1/admin/login") || 
+        return path.equals("/api/v1/admin/login") ||
                path.equals("/api/v1/admin/register");
     }
-    
-    /**
-     * 判断是否为管理员端点
-     */
-    private boolean isAdminEndpoint(String path) {
-        return path.startsWith("/api/v1/admin/");
-    }
-    
+
     /**
      * 发送认证失败响应
      */
@@ -121,7 +108,7 @@ public class ApiRouter extends HttpServlet {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
-        response.getWriter().write("{\"success\":false,\"error\":\"Unauthorized: Invalid API key or admin password\"}");
+        response.getWriter().write("{\"success\":false,\"error\":\"Unauthorized: Invalid API key or token\"}");
         response.getWriter().flush();
     }
     
@@ -302,7 +289,7 @@ public class ApiRouter extends HttpServlet {
         // 设置CORS头
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Admin-Password");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key");
         response.setHeader("Access-Control-Max-Age", "3600");
         response.setStatus(HttpServletResponse.SC_OK);
     }

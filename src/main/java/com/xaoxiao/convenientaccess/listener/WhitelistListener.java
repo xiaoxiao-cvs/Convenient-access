@@ -22,17 +22,23 @@ import com.xaoxiao.convenientaccess.whitelist.WhitelistManager;
  */
 public class WhitelistListener implements Listener {
     private static final Logger logger = LoggerFactory.getLogger(WhitelistListener.class);
-    
+
+    // PreLogin 阶段白名单查询超时（秒）
+    // 包含异步线程池排队 + DB 查询全部时间。配置过低会在高负载时误踢真实白名单玩家
+    private static final int WHITELIST_CHECK_TIMEOUT_SECONDS = 15;
+    // 超过该阈值的查询会触发警告日志，便于发现线程池堆积 / DB 慢查询
+    private static final long SLOW_CHECK_WARN_THRESHOLD_MS = 1500;
+
     private final ConvenientAccessPlugin plugin;
     private final WhitelistManager whitelistManager;
-    
 
-    
+
+
     public WhitelistListener(ConvenientAccessPlugin plugin) {
         this.plugin = plugin;
         this.whitelistManager = plugin.getWhitelistSystem().getWhitelistManager();
     }
-    
+
     /**
      * 处理玩家预登录事件（异步）
      * 在玩家实际进入服务器前检查白名单
@@ -41,82 +47,100 @@ public class WhitelistListener implements Listener {
     public void onAsyncPlayerPreLogin(AsyncPlayerPreLoginEvent event) {
         String playerName = event.getName();
         String playerUuid = event.getUniqueId().toString();
-        
+        String ipAddress = event.getAddress().getHostAddress();
+
         logger.info("=== 白名单验证开始 ===");
         logger.info("玩家: {} ({})", playerName, playerUuid);
-        logger.info("IP地址: {}", event.getAddress().getHostAddress());
-        
+        logger.info("IP地址: {}", ipAddress);
+
+        long startedAt = System.currentTimeMillis();
         try {
             // 检查白名单系统是否已初始化
             boolean isSystemInitialized = plugin.getWhitelistSystem().isInitialized();
             logger.info("白名单系统初始化状态: {}", isSystemInitialized);
-            
+
             if (!isSystemInitialized) {
                 logger.warn("❌ 白名单系统未初始化，允许玩家 {} 进入", playerName);
                 return;
             }
-            
+
             // 检查配置是否启用白名单
             boolean isWhitelistEnabled = plugin.getConfigManager().isWhitelistEnabled();
             logger.info("白名单功能启用状态: {}", isWhitelistEnabled);
-            
+
             if (!isWhitelistEnabled) {
                 logger.info("✅ 白名单功能已禁用，允许玩家 {} 进入", playerName);
                 return;
             }
-            
-            // 检查玩家是否有绕过白名单的权限（需要提前在数据库或配置中设置）
-            // 注意：在PreLoginEvent中无法直接检查权限，因为玩家还未完全加载
-            // 这里可以通过其他方式实现，比如配置文件中的绕过列表
-            
+
             // 检查白名单管理器状态
             int cacheSize = whitelistManager.getCacheSize();
             logger.info("白名单缓存大小: {}", cacheSize);
-            
+
             // 异步检查玩家是否在白名单中
             logger.info("开始检查玩家白名单状态...");
-            
+
             // 使用离线模式检查（同时检查用户名和UUID）
             CompletableFuture<Boolean> whitelistCheck = whitelistManager.isPlayerWhitelistedOffline(playerName, playerUuid);
-            
-            // 等待结果（设置合理的超时时间）
-            Boolean isWhitelisted = whitelistCheck.get(5, TimeUnit.SECONDS);
-            logger.info("白名单检查结果: {}", isWhitelisted);
-            
+
+            Boolean isWhitelisted = whitelistCheck.get(WHITELIST_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            long elapsedMs = System.currentTimeMillis() - startedAt;
+            logger.info("白名单检查结果: {} (耗时 {}ms)", isWhitelisted, elapsedMs);
+
+            // 慢查询警告 — 同时写到 Bukkit 主 console，便于发现线程池堆积征兆
+            if (elapsedMs >= SLOW_CHECK_WARN_THRESHOLD_MS) {
+                plugin.getLogger().warning(String.format(
+                    "[Whitelist] 慢查询: %s 耗时 %dms (阈值 %dms) — 可能预示线程池堆积，距离 %ds 超时还有 %dms",
+                    playerName, elapsedMs, SLOW_CHECK_WARN_THRESHOLD_MS,
+                    WHITELIST_CHECK_TIMEOUT_SECONDS, WHITELIST_CHECK_TIMEOUT_SECONDS * 1000L - elapsedMs));
+            }
+
             if (!isWhitelisted) {
                 // 玩家不在白名单中，拒绝连接
                 String kickMessage = getCustomKickMessage(playerName);
                 event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_WHITELIST, kickMessage);
-                
+
                 logger.warn("❌ 拒绝玩家连接（未在白名单中）: {} ({})", playerName, playerUuid);
                 logger.info("踢出消息: {}", kickMessage);
-                
+
                 // 记录操作日志
-                logUnauthorizedAccess(playerName, playerUuid, event.getAddress().getHostAddress());
+                logUnauthorizedAccess(playerName, playerUuid, ipAddress);
             } else {
                 logger.info("✅ 允许玩家连接（已在白名单中）: {} ({})", playerName, playerUuid);
             }
-            
+
         } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException | InterruptedException e) {
-            logger.error("❌ 检查玩家白名单状态时发生错误: {} ({})", playerName, playerUuid, e);
-            
+            long elapsedMs = System.currentTimeMillis() - startedAt;
+            logger.error("❌ 检查玩家白名单状态时发生错误 (耗时 {}ms): {} ({})", elapsedMs, playerName, playerUuid, e);
+
             // 发生错误时的处理策略
             boolean strictMode = plugin.getConfigManager().isWhitelistStrictMode();
             logger.info("严格模式状态: {}", strictMode);
-            
+
+            // 关键: 这条 WARN 必须落到 Bukkit 主 console，确保运维能看到 — SLF4J error 在某些桥接环境下可能被吞
+            String reason = e instanceof java.util.concurrent.TimeoutException
+                ? String.format("查询超时 (>=%ds, 实际 %dms) — 异步线程池可能堆积",
+                                WHITELIST_CHECK_TIMEOUT_SECONDS, elapsedMs)
+                : "查询异常: " + e.getClass().getSimpleName() + " - " + e.getMessage();
+
             if (strictMode) {
                 // 严格模式：发生错误时拒绝连接
                 event.disallow(
-                    AsyncPlayerPreLoginEvent.Result.KICK_OTHER, 
+                    AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
                     "§c白名单验证失败，请稍后重试"
                 );
+                plugin.getLogger().warning(String.format(
+                    "[Whitelist] 严格模式踢出: %s (%s, IP: %s) — 原因: %s",
+                    playerName, playerUuid, ipAddress, reason));
                 logger.warn("❌ 严格模式下拒绝玩家连接（白名单验证失败）: {}", playerName);
             } else {
-                // 宽松模式：发生错误时允许连接
+                plugin.getLogger().warning(String.format(
+                    "[Whitelist] 宽松模式放行: %s (%s) — 原因: %s",
+                    playerName, playerUuid, reason));
                 logger.warn("⚠️ 宽松模式下允许玩家连接（白名单验证失败）: {}", playerName);
             }
         } finally {
-            logger.info("=== 白名单验证结束 ===");
+            logger.info("=== 白名单验证结束 (总耗时 {}ms) ===", System.currentTimeMillis() - startedAt);
         }
     }
     
