@@ -1,34 +1,138 @@
 package com.shinoyuki.accesshub;
 
+import java.nio.file.Path;
+
 import com.mojang.logging.LogUtils;
+import com.shinoyuki.accesshub.api.AdminAuthController;
+import com.shinoyuki.accesshub.api.ApiRouter;
+import com.shinoyuki.accesshub.api.OperationLogApiController;
+import com.shinoyuki.accesshub.api.UserApiController;
+import com.shinoyuki.accesshub.api.WhitelistApiController;
+import com.shinoyuki.accesshub.auth.AdminAuthService;
+import com.shinoyuki.accesshub.auth.LoginAttemptService;
+import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
+import com.shinoyuki.accesshub.config.AccessHubConfig;
+import com.shinoyuki.accesshub.config.AccessHubConfigImpl;
+import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.http.HttpServer;
+import com.shinoyuki.accesshub.operation.OperationLogDao;
+import com.shinoyuki.accesshub.whitelist.WhitelistManager;
+
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.loading.FMLPaths;
 import org.slf4j.Logger;
 
 @Mod(AccessHubMod.MOD_ID)
 public final class AccessHubMod {
     public static final String MOD_ID = "shinoyuki_accesshub";
 
+    /** Shinoyuki 生态约定: 所有 mod 共享 config/Shinoyuki-Optimize/&lt;mod_id&gt;/ 状态目录, 配置 + 数据库集中存放便于运维统一备份. */
+    private static final String SHINOYUKI_DIR = "Shinoyuki-Optimize";
+
     private static final Logger LOGGER = LogUtils.getLogger();
+
+    private AccessHubConfig config;
+    private DatabaseManager databaseManager;
+    private WhitelistManager whitelistManager;
+    private AdminAuthService adminAuthService;
+    private HttpServer httpServer;
 
     public AccessHubMod() {
         MinecraftForge.EVENT_BUS.register(this);
-        LOGGER.info("AccessHub v{} loading on Forge 1.20.1", "0.2.0");
+        LOGGER.info("AccessHub v0.2.0 loading on Forge 1.20.1");
     }
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
-        // v2 阶段占位: 后续接管旧 ConvenientAccessPlugin.onEnable 的初始化职责
-        // (Database -> Cache -> Auth -> WhitelistManager -> HttpServer)
-        LOGGER.info("AccessHub server-starting hook fired");
+        try {
+            initialize();
+            LOGGER.info("AccessHub 服务端启动完成");
+        } catch (Exception e) {
+            // 不向 Forge 抛出: mod 启动失败应该只让本 mod 业务不可用, 而不是把整个服务器拖死
+            LOGGER.error("AccessHub 启动失败, 白名单/HTTP API 功能将不可用", e);
+        }
+    }
+
+    /**
+     * 业务初始化, 顺序: 配置 -> 数据库 -> 业务管理器 -> 认证 -> Controllers -> ApiRouter -> HttpServer.
+     */
+    private void initialize() throws Exception {
+        // 1. 状态目录 config/Shinoyuki-Optimize/shinoyuki_accesshub/ (含 common.toml 与 whitelist.db)
+        Path baseDir = FMLPaths.CONFIGDIR.get().resolve(SHINOYUKI_DIR).resolve(MOD_ID);
+        LOGGER.info("AccessHub 状态目录: {}", baseDir);
+
+        // 2. 配置 (Night Config TOML, 首次启动自动生成默认值与三件套密钥)
+        config = new AccessHubConfigImpl(baseDir.resolve("common.toml"));
+
+        // 3. 数据库 (跟配置文件同目录, 简化运维备份: 备份 config/Shinoyuki-Optimize/ 一次性带走所有状态)
+        databaseManager = new DatabaseManager(baseDir.toFile());
+        if (!databaseManager.initialize().get()) {
+            throw new IllegalStateException("数据库初始化失败");
+        }
+
+        // 4. 业务管理器
+        whitelistManager = new WhitelistManager(databaseManager);
+        if (!whitelistManager.initialize().get()) {
+            throw new IllegalStateException("白名单管理器初始化失败");
+        }
+        RegistrationTokenManager tokenManager = new RegistrationTokenManager(databaseManager);
+        OperationLogDao operationLogDao = new OperationLogDao(databaseManager);
+
+        // 5. 认证服务
+        LoginAttemptService loginAttempt = new LoginAttemptService(
+                config.getLoginMaxAttempts(),
+                config.getLoginLockDurationMinutes(),
+                config.isLoginAttemptLimitEnabled()
+        );
+        adminAuthService = new AdminAuthService(
+                databaseManager,
+                tokenManager,
+                config.getAdminPassword(),
+                config.getJwtSecret(),
+                loginAttempt
+        );
+
+        // 6. API Controllers
+        WhitelistApiController whitelistController = new WhitelistApiController(whitelistManager, operationLogDao);
+        UserApiController userController = new UserApiController(tokenManager, whitelistManager);
+        OperationLogApiController operationLogController = new OperationLogApiController(operationLogDao);
+        AdminAuthController adminAuthController = new AdminAuthController(adminAuthService);
+
+        // PlayerDataHandler 实现留待 v4 (Forge MinecraftServer Player API 重写后注入).
+        // 此前 ApiRouter 对 /api/v1/player 路径会返回 503 Service Unavailable (router 内部 null 防御).
+        ApiRouter apiRouter = new ApiRouter(
+                whitelistController, userController,
+                /* playerDataHandler */ null,
+                operationLogController, adminAuthController,
+                config
+        );
+
+        // 7. HTTP 服务器
+        if (config.isHttpEnabled()) {
+            httpServer = new HttpServer(config, apiRouter);
+            httpServer.start();
+        } else {
+            LOGGER.info("HTTP 服务器在配置中已禁用, 跳过启动");
+        }
     }
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
-        // v2 阶段占位: 后续接管 onDisable 的关闭职责 (HttpServer.stop, executor shutdown 等)
-        LOGGER.info("AccessHub server-stopping hook fired");
+        LOGGER.info("AccessHub 正在关闭...");
+        try {
+            if (httpServer != null) {
+                httpServer.stop();
+            }
+            if (databaseManager != null) {
+                databaseManager.shutdown();
+            }
+        } catch (Exception e) {
+            LOGGER.warn("AccessHub 关闭时发生异常", e);
+        }
+        LOGGER.info("AccessHub 已关闭");
     }
 }
