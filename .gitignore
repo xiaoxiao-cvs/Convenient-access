@@ -1,4 +1,18 @@
-# Maven
+# Gradle (v2 起使用 ForgeGradle)
+.gradle/
+build/
+out/
+classes/
+
+# Forge 运行目录 (./gradlew runClient / runServer / runData 产生)
+run/
+run-data/
+runs/
+
+# IntelliJ ForgeGradle 生成的源映射资源 (随构建重生成)
+src/generated/
+
+# Maven (v1 遗留，保留以便 checkout v1.0-final tag 时仍能正确忽略)
 target/
 pom.xml.tag
 pom.xml.releaseBackup
@@ -60,8 +74,12 @@ whitelist.json
 usercache.json
 usernamecache.json
 
-# Keep the built plugin JAR for distribution
+# Gradle wrapper jar 必须随仓库分发 (./gradlew 启动依赖此 jar)
+!gradle/wrapper/gradle-wrapper.jar
+
+# Keep built artifacts for distribution
 !target/convenient-access-*.jar
+!build/libs/accesshub-*.jar
 
 /.VSCodeCounter
 /docs
