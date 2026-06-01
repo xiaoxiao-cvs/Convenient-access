@@ -6,6 +6,8 @@ import com.mojang.logging.LogUtils;
 import com.shinoyuki.accesshub.api.AdminAuthController;
 import com.shinoyuki.accesshub.api.ApiRouter;
 import com.shinoyuki.accesshub.api.OperationLogApiController;
+import com.shinoyuki.accesshub.api.PlayerDataHandler;
+import com.shinoyuki.accesshub.api.PlayerDataHandlerImpl;
 import com.shinoyuki.accesshub.api.UserApiController;
 import com.shinoyuki.accesshub.api.WhitelistApiController;
 import com.shinoyuki.accesshub.auth.AdminAuthService;
@@ -54,7 +56,8 @@ public final class AccessHubMod {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         try {
-            initialize();
+            // 传入 MinecraftServer 供 PlayerDataHandler 在主线程采集玩家数据
+            initialize(event.getServer());
             LOGGER.info("AccessHub 服务端启动完成");
         } catch (Exception e) {
             // 不向 Forge 抛出: mod 启动失败应该只让本 mod 业务不可用, 而不是把整个服务器拖死
@@ -65,7 +68,7 @@ public final class AccessHubMod {
     /**
      * 业务初始化, 顺序: 配置 -> 数据库 -> 业务管理器 -> 认证 -> Controllers -> ApiRouter -> HttpServer.
      */
-    private void initialize() throws Exception {
+    private void initialize(net.minecraft.server.MinecraftServer server) throws Exception {
         // 1. 状态目录 config/Shinoyuki-Optimize/shinoyuki_accesshub/ (含 common.toml 与 whitelist.db)
         Path baseDir = FMLPaths.CONFIGDIR.get().resolve(SHINOYUKI_DIR).resolve(MOD_ID);
         LOGGER.info("AccessHub 状态目录: {}", baseDir);
@@ -106,12 +109,11 @@ public final class AccessHubMod {
         UserApiController userController = new UserApiController(tokenManager, whitelistManager);
         OperationLogApiController operationLogController = new OperationLogApiController(operationLogDao);
         AdminAuthController adminAuthController = new AdminAuthController(adminAuthService);
+        PlayerDataHandler playerDataHandler = new PlayerDataHandlerImpl(server);
 
-        // PlayerDataHandler 实现留待 v4 (Forge MinecraftServer Player API 重写后注入).
-        // 此前 ApiRouter 对 /api/v1/player 路径会返回 503 Service Unavailable (router 内部 null 防御).
         ApiRouter apiRouter = new ApiRouter(
                 whitelistController, userController,
-                /* playerDataHandler */ null,
+                playerDataHandler,
                 operationLogController, adminAuthController,
                 config
         );
