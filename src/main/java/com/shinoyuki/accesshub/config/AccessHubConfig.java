@@ -54,7 +54,6 @@ public interface AccessHubConfig {
     int getTokenExpiryHours();
     boolean isAutoCleanupTokens();
     boolean isJoinNotificationEnabled();
-    String getJoinNotificationPermission();
     boolean isWelcomeMessageEnabled();
     String getWelcomeMessage();
 

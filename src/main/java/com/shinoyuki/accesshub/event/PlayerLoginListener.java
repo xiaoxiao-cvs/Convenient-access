@@ -12,9 +12,13 @@ import java.util.concurrent.TimeoutException;
 import com.mojang.authlib.GameProfile;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerNegotiationEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.slf4j.Logger;
@@ -81,6 +85,98 @@ public final class PlayerLoginListener {
                 () -> performWhitelistCheck(event, playerName, playerUuid, ipAddress)
         );
         event.enqueueWork(check);
+    }
+
+    /**
+     * 玩家进入游戏世界后的处理, 对应 v1 WhitelistListener.onPlayerJoin。
+     *
+     * 三件事 (沿用 v1 行为):
+     *  1. UUID 补全: 按名字加入(UUID留空)的白名单条目, 玩家首次登录时补上真实 UUID
+     *  2. 欢迎消息: 向玩家发送可配置的欢迎语
+     *  3. 加入通知: 向在线 OP 广播白名单玩家加入
+     *
+     * 注: WhitelistManager 的查询在异步线程池执行, 但向玩家/OP 发包必须回到服务器主线程,
+     * 故消息发送统一经 server.execute() 调度。
+     */
+    @SubscribeEvent
+    public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
+        if (!config.isWhitelistEnabled()) {
+            return;
+        }
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        String name = player.getGameProfile().getName();
+        String uuid = player.getUUID().toString();
+
+        whitelistManager.getPlayerByUuid(uuid).thenCompose(byUuid -> {
+            if (byUuid.isPresent()) {
+                handleJoin(player, byUuid.get());
+                return CompletableFuture.completedFuture(null);
+            }
+            // UUID 未命中, 尝试按名字找 (可能是 UUID 待补充的条目)
+            return whitelistManager.getPlayerByName(name).thenAccept(byName -> {
+                if (byName.isEmpty()) {
+                    // 不在白名单却能进服: 白名单未启用或被放行, 不处理
+                    logger.debug("玩家 {} 不在白名单, 跳过加入处理", name);
+                    return;
+                }
+                WhitelistEntry entry = byName.get();
+                if (entry.getUuid() == null || entry.getUuid().trim().isEmpty()) {
+                    whitelistManager.updatePlayerUuid(name, uuid).thenAccept(ok -> {
+                        if (ok) {
+                            logger.info("已为玩家 {} 补充 UUID: {}", name, uuid);
+                            handleJoin(player, entry);
+                        } else {
+                            logger.warn("为玩家 {} 补充 UUID 失败", name);
+                        }
+                    });
+                } else {
+                    logger.warn("同名玩家 UUID 不匹配: {} (库内: {}, 当前: {})",
+                            name, entry.getUuid(), uuid);
+                    handleJoin(player, entry);
+                }
+            });
+        }).exceptionally(t -> {
+            logger.error("处理玩家 {} 加入事件失败", name, t);
+            return null;
+        });
+    }
+
+    /** 加入后通知 + 欢迎消息, 统一回主线程执行发包。 */
+    private void handleJoin(ServerPlayer player, WhitelistEntry entry) {
+        MinecraftServer server = player.getServer();
+        if (server == null) {
+            return;
+        }
+        server.execute(() -> {
+            if (config.isJoinNotificationEnabled()) {
+                notifyOnlineOps(server, player, entry);
+            }
+            if (config.isWelcomeMessageEnabled()) {
+                sendWelcome(player);
+            }
+        });
+    }
+
+    /** 向在线 OP (权限等级>=2) 广播白名单玩家加入。Forge 无 Bukkit 权限节点, 用 OP 等级替代 v1 的权限节点过滤。 */
+    private void notifyOnlineOps(MinecraftServer server, ServerPlayer joined, WhitelistEntry entry) {
+        String text = "§a§l[白名单] §e" + joined.getGameProfile().getName()
+                + " §7已加入服务器 §8(添加者: " + entry.getAddedByName() + ")";
+        Component message = Component.literal(text);
+        for (ServerPlayer online : server.getPlayerList().getPlayers()) {
+            if (online.hasPermissions(2)) {
+                online.sendSystemMessage(message);
+            }
+        }
+    }
+
+    /** 向玩家发送可配置欢迎消息, & 颜色码转 §, {player} 占位符替换。 */
+    private void sendWelcome(ServerPlayer player) {
+        String text = config.getWelcomeMessage()
+                .replace("{player}", player.getGameProfile().getName())
+                .replace("&", "§");
+        player.sendSystemMessage(Component.literal(text));
     }
 
     private void performWhitelistCheck(PlayerNegotiationEvent event,

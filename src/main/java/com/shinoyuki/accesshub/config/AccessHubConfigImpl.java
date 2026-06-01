@@ -101,7 +101,8 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("whitelist.token-expiry-hours", 24);
         config.set("whitelist.auto-cleanup-tokens", true);
         config.set("whitelist.join-notification.enabled", true);
-        config.set("whitelist.join-notification.permission", "accesshub.whitelist.notify");
+        config.setComment("whitelist.join-notification.enabled",
+                " 白名单玩家加入时向在线 OP (权限等级>=2) 广播通知");
         config.set("whitelist.welcome-message.enabled", true);
         config.set("whitelist.welcome-message.text", "&a欢迎回到服务器！\n&7玩家: &e{player}");
 
@@ -197,11 +198,6 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     @Override public int    getTokenExpiryHours()      { return config.getIntOrElse("whitelist.token-expiry-hours", 24); }
     @Override public boolean isAutoCleanupTokens()     { return config.getOrElse("whitelist.auto-cleanup-tokens", true); }
     @Override public boolean isJoinNotificationEnabled() { return config.getOrElse("whitelist.join-notification.enabled", true); }
-
-    @Override
-    public String getJoinNotificationPermission() {
-        return config.getOrElse("whitelist.join-notification.permission", "accesshub.whitelist.notify");
-    }
 
     @Override public boolean isWelcomeMessageEnabled() { return config.getOrElse("whitelist.welcome-message.enabled", true); }
 
