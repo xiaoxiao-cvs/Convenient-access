@@ -106,6 +106,13 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("whitelist.welcome-message.enabled", true);
         config.set("whitelist.welcome-message.text", "&a欢迎回到服务器！\n&7玩家: &e{player}");
 
+        config.set("backup.enabled", true);
+        config.set("backup.schedule", "0:2:0");
+        config.setComment("backup.schedule", " 备份计划 \"天:小时:分钟\", 如 0:2:0=每天02:00, 1:0:0=每隔1天的00:00");
+        config.set("backup.retention-days", 7);
+        config.set("backup.compress", true);
+        config.setComment("backup.compress", " 是否压缩备份为 ZIP");
+
         config.set("logging.log-requests", false);
         config.set("logging.debug", false);
 
@@ -205,6 +212,11 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     public String getWelcomeMessage() {
         return config.getOrElse("whitelist.welcome-message.text", "&a欢迎回到服务器！\n&7玩家: &e{player}");
     }
+
+    @Override public boolean isBackupEnabled()       { return config.getOrElse("backup.enabled", true); }
+    @Override public String  getBackupSchedule()     { return config.getOrElse("backup.schedule", "0:2:0"); }
+    @Override public int     getBackupRetentionDays(){ return config.getIntOrElse("backup.retention-days", 7); }
+    @Override public boolean isBackupCompress()      { return config.getOrElse("backup.compress", true); }
 
     @Override public boolean isLogRequests() { return config.getOrElse("logging.log-requests", false); }
     @Override public boolean isDebug()       { return config.getOrElse("logging.debug", false); }

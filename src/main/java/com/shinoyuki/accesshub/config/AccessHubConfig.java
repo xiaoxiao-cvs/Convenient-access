@@ -57,6 +57,12 @@ public interface AccessHubConfig {
     boolean isWelcomeMessageEnabled();
     String getWelcomeMessage();
 
+    // 数据库自动备份
+    boolean isBackupEnabled();
+    String getBackupSchedule();      // "天:小时:分钟", 如 "0:2:0" = 每天 02:00
+    int getBackupRetentionDays();
+    boolean isBackupCompress();
+
     // 日志
     boolean isLogRequests();
     boolean isDebug();

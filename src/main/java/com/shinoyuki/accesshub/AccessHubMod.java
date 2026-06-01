@@ -11,6 +11,7 @@ import com.shinoyuki.accesshub.api.WhitelistApiController;
 import com.shinoyuki.accesshub.auth.AdminAuthService;
 import com.shinoyuki.accesshub.auth.LoginAttemptService;
 import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
+import com.shinoyuki.accesshub.backup.BackupManager;
 import com.shinoyuki.accesshub.command.AccessHubCommand;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.config.AccessHubConfigImpl;
@@ -43,6 +44,7 @@ public final class AccessHubMod {
     private WhitelistManager whitelistManager;
     private AdminAuthService adminAuthService;
     private HttpServer httpServer;
+    private BackupManager backupManager;
 
     public AccessHubMod() {
         MinecraftForge.EVENT_BUS.register(this);
@@ -129,12 +131,19 @@ public final class AccessHubMod {
                 config, whitelistManager, databaseManager);
         MinecraftForge.EVENT_BUS.register(loginListener);
         LOGGER.info("白名单登录监听器已注册到事件总线");
+
+        // 9. 数据库自动备份 (定时备份 whitelist.db, 与数据库同目录)
+        backupManager = new BackupManager(baseDir.toFile(), config);
+        backupManager.initialize();
     }
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         LOGGER.info("AccessHub 正在关闭...");
         try {
+            if (backupManager != null) {
+                backupManager.shutdown();
+            }
             if (httpServer != null) {
                 httpServer.stop();
             }
