@@ -4,6 +4,9 @@ build/
 out/
 classes/
 
+# Eclipse/VSCode Java 构建输出 (应用 eclipse 插件后生成, 非源码)
+bin/
+
 # Forge 运行目录 (./gradlew runClient / runServer / runData 产生)
 run/
 run-data/
