@@ -55,6 +55,12 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
     mavenCentral()
+    // Spark API (性能监测, 软依赖, 由服务器安装的 spark mod 在运行期提供)
+    maven {
+        name = 'lucko'
+        url = 'https://repo.lucko.me/'
+        content { includeGroup 'me.lucko' }
+    }
 }
 
 configurations {
@@ -78,6 +84,10 @@ dependencies {
     // 用 compileOnly 显式声明编译期可见, 不打包 (避免与 Forge 版本冲突)。
     compileOnly 'com.electronwill.night-config:core:3.6.4'
     compileOnly 'com.electronwill.night-config:toml:3.6.4'
+
+    // Spark API (软依赖): 仅编译期可见, 不打包。运行期由服务器安装的 spark mod 提供;
+    // 未安装时 SparkIntegration 经 ModList.isLoaded 检测后降级为 JVM MXBean fallback。
+    compileOnly 'me.lucko:spark-api:0.1-SNAPSHOT'
 
     // Forge 1.20.1 自带 Gson 与 SLF4J，无需声明
 }

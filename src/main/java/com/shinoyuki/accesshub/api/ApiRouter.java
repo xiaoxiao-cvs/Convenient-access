@@ -22,16 +22,19 @@ public class ApiRouter extends HttpServlet {
     private final WhitelistApiController whitelistController;
     private final UserApiController userController;
     private final PlayerDataHandler playerDataController;
+    private final ServerPerformanceHandler performanceHandler;
     private final OperationLogApiController operationLogController;
     private AdminAuthController adminAuthController;
     private final AccessHubConfig configManager;
-    
-    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController, 
-                     PlayerDataHandler playerDataController, OperationLogApiController operationLogController,
+
+    public ApiRouter(WhitelistApiController whitelistController, UserApiController userController,
+                     PlayerDataHandler playerDataController, ServerPerformanceHandler performanceHandler,
+                     OperationLogApiController operationLogController,
                      AdminAuthController adminAuthController, AccessHubConfig configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
         this.playerDataController = playerDataController;
+        this.performanceHandler = performanceHandler;
         this.operationLogController = operationLogController;
         this.adminAuthController = adminAuthController;
         this.configManager = configManager;
@@ -173,6 +176,14 @@ public class ApiRouter extends HttpServlet {
                     playerDataController.handleGetPlayerData(request, response);
                 } else {
                     send503Response(response, "Player data handler not available");
+                }
+            }
+            // 服务器性能监测路由 (Spark + JVM)
+            else if (path.equals("/api/v1/server/performance")) {
+                if (performanceHandler != null) {
+                    performanceHandler.handleGetPerformance(request, response);
+                } else {
+                    send503Response(response, "Performance handler not available");
                 }
             }
             // 管理员信息查询路由

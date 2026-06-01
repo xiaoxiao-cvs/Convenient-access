@@ -23,3 +23,12 @@ description = '''${mod_description}'''
     versionRange = "${minecraft_version_range}"
     ordering = "NONE"
     side = "BOTH"
+
+# 软依赖: spark 性能监测 mod。装了则 /api/v1/server/performance 提供 Spark 详细数据,
+# 未装则降级为 JVM 基础数据。ordering=AFTER 保证 spark 先于本 mod 加载。
+[[dependencies.${mod_id}]]
+    modId = "spark"
+    mandatory = false
+    versionRange = "[0,)"
+    ordering = "AFTER"
+    side = "BOTH"

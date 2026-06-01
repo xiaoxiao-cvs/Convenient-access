@@ -98,6 +98,17 @@ public final class AccessHubCommand {
                                 : Component.literal("关 (查询失败放行)").withStyle(ChatFormatting.GRAY)),
                 false);
 
+        // 性能: 用 vanilla getAverageTickTime 计算 TPS/MSPT (无需 spark mod)
+        MinecraftServer server = source.getServer();
+        double mspt = Math.max(0.01, server.getAverageTickTime());
+        double tps = Math.min(20.0, 1000.0 / mspt);
+        ChatFormatting tpsColor = tps >= 19.0 ? ChatFormatting.GREEN
+                : tps >= 15.0 ? ChatFormatting.YELLOW : ChatFormatting.RED;
+        source.sendSuccess(() -> kv("性能", Component.literal(
+                String.format("TPS %.1f / MSPT %.1fms", tps, mspt)).withStyle(tpsColor)), false);
+        source.sendSuccess(() -> Component.literal("  (详细性能数据见 GET /api/v1/server/performance)")
+                .withStyle(ChatFormatting.DARK_GRAY), false);
+
         return httpRunning ? 1 : 0;
     }
 

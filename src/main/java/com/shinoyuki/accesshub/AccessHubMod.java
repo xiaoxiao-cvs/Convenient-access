@@ -8,7 +8,10 @@ import com.shinoyuki.accesshub.api.ApiRouter;
 import com.shinoyuki.accesshub.api.OperationLogApiController;
 import com.shinoyuki.accesshub.api.PlayerDataHandler;
 import com.shinoyuki.accesshub.api.PlayerDataHandlerImpl;
+import com.shinoyuki.accesshub.api.ServerPerformanceHandler;
+import com.shinoyuki.accesshub.api.ServerPerformanceHandlerImpl;
 import com.shinoyuki.accesshub.api.UserApiController;
+import com.shinoyuki.accesshub.integration.SparkIntegration;
 import com.shinoyuki.accesshub.api.WhitelistApiController;
 import com.shinoyuki.accesshub.auth.AdminAuthService;
 import com.shinoyuki.accesshub.auth.LoginAttemptService;
@@ -47,6 +50,7 @@ public final class AccessHubMod {
     private AdminAuthService adminAuthService;
     private HttpServer httpServer;
     private BackupManager backupManager;
+    private SparkIntegration sparkIntegration;
 
     public AccessHubMod() {
         MinecraftForge.EVENT_BUS.register(this);
@@ -110,10 +114,13 @@ public final class AccessHubMod {
         OperationLogApiController operationLogController = new OperationLogApiController(operationLogDao);
         AdminAuthController adminAuthController = new AdminAuthController(adminAuthService);
         PlayerDataHandler playerDataHandler = new PlayerDataHandlerImpl(server);
+        // Spark 性能监测 (软依赖, 未装 spark mod 时降级为 JVM 数据)
+        sparkIntegration = new SparkIntegration(server);
+        ServerPerformanceHandler performanceHandler = new ServerPerformanceHandlerImpl(sparkIntegration);
 
         ApiRouter apiRouter = new ApiRouter(
                 whitelistController, userController,
-                playerDataHandler,
+                playerDataHandler, performanceHandler,
                 operationLogController, adminAuthController,
                 config
         );
