@@ -3,6 +3,8 @@ plugins {
     id 'idea'
     id 'maven-publish'
     id 'net.minecraftforge.gradle' version '[6.0.16,6.2)'
+    // 把第三方依赖打进 mod jar (ForgeGradle 的 implementation 不会嵌入运行期 classpath)
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
 version = mod_version
@@ -55,18 +57,29 @@ repositories {
     mavenCentral()
 }
 
+configurations {
+    // shade 里的依赖会被 shadowJar 打进最终 jar; extendsFrom 让它们同时进编译 classpath
+    shade
+    implementation.extendsFrom shade
+}
+
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
-    // HTTP 服务器栈 (后台管理 API 入口)
-    implementation 'org.eclipse.jetty:jetty-server:11.0.20'
-    implementation 'org.eclipse.jetty:jetty-servlet:11.0.20'
-    implementation 'jakarta.servlet:jakarta.servlet-api:5.0.0'
+    // HTTP 服务器栈 (后台管理 API 入口) — 必须 shade 进 jar, Forge 运行期不提供
+    shade 'org.eclipse.jetty:jetty-server:11.0.20'
+    shade 'org.eclipse.jetty:jetty-servlet:11.0.20'
+    shade 'jakarta.servlet:jakarta.servlet-api:5.0.0'
 
-    // 持久化 (SQLite 单文件，无外部依赖)
-    implementation 'org.xerial:sqlite-jdbc:3.42.0.0'
+    // 持久化 (SQLite 单文件) — 必须 shade 进 jar, 含各平台原生库
+    shade 'org.xerial:sqlite-jdbc:3.42.0.0'
 
-    // Forge 1.20.1 自带 Gson 与 SLF4J，无需重复声明，避免版本冲突
+    // Night Config: Forge 1.20.1 自带 3.6.4 (传递依赖), 运行期已在 classpath。
+    // 用 compileOnly 显式声明编译期可见, 不打包 (避免与 Forge 版本冲突)。
+    compileOnly 'com.electronwill.night-config:core:3.6.4'
+    compileOnly 'com.electronwill.night-config:toml:3.6.4'
+
+    // Forge 1.20.1 自带 Gson 与 SLF4J，无需声明
 }
 
 tasks.named('processResources', ProcessResources).configure {
@@ -91,6 +104,8 @@ tasks.named('processResources', ProcessResources).configure {
 }
 
 tasks.named('jar', Jar).configure {
+    // 原始 dev jar (Mojmap, 不含依赖), 不作为发布产物
+    archiveClassifier = 'dev'
     manifest {
         attributes([
                 'Specification-Title'     : mod_id,
@@ -104,10 +119,37 @@ tasks.named('jar', Jar).configure {
     }
 }
 
+// fat jar: 合并 shade 依赖 + mod 类。archiveClassifier='' 使其成为主产物 shinoyuki_accesshub-<ver>.jar
+tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
+    archiveClassifier = ''
+    configurations = [project.configurations.shade]
+
+    // 只 relocate Jetty: 自包含、避免与其它 mod 的 HTTP 栈冲突。
+    // 不 relocate org.sqlite: sqlite-jdbc 按包路径加载 org/sqlite/native/** 原生库, relocate 会破坏。
+    // 不 relocate jakarta.servlet: 无其它 provider, 无冲突风险。
+    relocate 'org.eclipse.jetty', 'com.shinoyuki.accesshub.libs.jetty'
+
+    // 合并 META-INF/services (Jetty 的 ServiceLoader 文件 + sqlite 的 java.sql.Driver), 否则被覆盖丢失
+    mergeServiceFiles()
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+    manifest.inheritFrom tasks.jar.manifest
+}
+
+// 关键: 对 shadowJar 产物执行 reobf (Mojmap -> SRG), 否则生产环境 MC API 调用映射错乱。
+// 第三方依赖类无 MC 引用, reobf 原样放行。生成 reobfShadowJar 任务。
+reobf {
+    shadowJar {}
+}
+
+tasks.named('assemble').configure {
+    dependsOn tasks.named('reobfShadowJar')
+}
+
 publishing {
     publications {
         register('mavenJava', MavenPublication) {
-            artifact jar
+            artifact tasks.shadowJar
         }
     }
     repositories {

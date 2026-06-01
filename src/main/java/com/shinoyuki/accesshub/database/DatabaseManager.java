@@ -27,6 +27,18 @@ import org.slf4j.LoggerFactory;
 public class DatabaseManager {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
 
+    static {
+        // 显式注册 SQLite 驱动。Forge 的 SecureJar/模块层对 shade 进来的子 jar 内
+        // META-INF/services/java.sql.Driver 的 ServiceLoader 自动发现不可靠, 必须手动注册,
+        // 否则 DriverManager.getConnection("jdbc:sqlite:...") 抛 "No suitable driver"。
+        try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            throw new ExceptionInInitializerError(
+                "SQLite JDBC 驱动未在 classpath (检查 shadowJar 是否打包 org.xerial:sqlite-jdbc)");
+        }
+    }
+
     private final File dataFolder;
     private final String databasePath;
     private final ExecutorService executorService;
