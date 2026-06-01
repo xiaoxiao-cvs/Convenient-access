@@ -175,4 +175,11 @@ public final class AccessHubMod {
     public HttpServer getHttpServer() {
         return httpServer;
     }
+
+    /**
+     * 暴露给命令层使用. mod 启动失败时返回 null.
+     */
+    public WhitelistManager getWhitelistManager() {
+        return whitelistManager;
+    }
 }
