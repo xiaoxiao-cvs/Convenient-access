@@ -88,19 +88,8 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("api.auth.login-attempt-limit.max-attempts", 5);
         config.set("api.auth.login-attempt-limit.lock-duration-minutes", 15);
 
-        config.set("api.rate-limit.enabled", false);
-        config.set("api.rate-limit.requests-per-minute", 60);
-
         config.set("api.cors.enabled", true);
         config.set("api.cors.allowed-origins", new ArrayList<>(List.of("*")));
-
-        config.set("cache.server-info", 300);
-        config.set("cache.performance", 5);
-        config.set("cache.players", 10);
-        config.set("cache.worlds", 60);
-
-        config.set("spark.prefer-spark", true);
-        config.set("spark.timeout", 5000);
 
         config.set("whitelist.enabled", true);
         config.set("whitelist.strict-mode", true);
@@ -182,9 +171,6 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     @Override public int     getLoginMaxAttempts()        { return config.getIntOrElse("api.auth.login-attempt-limit.max-attempts", 5); }
     @Override public int     getLoginLockDurationMinutes(){ return config.getIntOrElse("api.auth.login-attempt-limit.lock-duration-minutes", 15); }
 
-    @Override public boolean isRateLimitEnabled()    { return config.getOrElse("api.rate-limit.enabled", false); }
-    @Override public int     getRequestsPerMinute() { return config.getIntOrElse("api.rate-limit.requests-per-minute", 60); }
-
     @Override public boolean isCorsEnabled() { return config.getOrElse("api.cors.enabled", true); }
 
     @Override
@@ -197,14 +183,6 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         }
         return result;
     }
-
-    @Override public int getServerInfoCacheTime()  { return config.getIntOrElse("cache.server-info", 300); }
-    @Override public int getPerformanceCacheTime() { return config.getIntOrElse("cache.performance", 5); }
-    @Override public int getPlayersCacheTime()     { return config.getIntOrElse("cache.players", 10); }
-    @Override public int getWorldsCacheTime()      { return config.getIntOrElse("cache.worlds", 60); }
-
-    @Override public boolean isPreferSpark()  { return config.getOrElse("spark.prefer-spark", true); }
-    @Override public int     getSparkTimeout(){ return config.getIntOrElse("spark.timeout", 5000); }
 
     @Override public boolean isWhitelistEnabled()    { return config.getOrElse("whitelist.enabled", true); }
     @Override public boolean isWhitelistStrictMode() { return config.getOrElse("whitelist.strict-mode", true); }

@@ -42,23 +42,9 @@ public interface AccessHubConfig {
     int getLoginMaxAttempts();
     int getLoginLockDurationMinutes();
 
-    // 请求速率
-    boolean isRateLimitEnabled();
-    int getRequestsPerMinute();
-
     // CORS
     boolean isCorsEnabled();
     List<String> getAllowedOrigins();
-
-    // 缓存 TTL (秒)
-    int getServerInfoCacheTime();
-    int getPerformanceCacheTime();
-    int getPlayersCacheTime();
-    int getWorldsCacheTime();
-
-    // Spark 集成
-    boolean isPreferSpark();
-    int getSparkTimeout();
 
     // 白名单
     boolean isWhitelistEnabled();
