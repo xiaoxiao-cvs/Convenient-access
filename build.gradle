@@ -143,6 +143,17 @@ tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.Shadow
     mergeServiceFiles()
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
+    // 剔除 Forge 已自带的 slf4j (Jetty 传递依赖带入): 否则 fat jar 与 Forge 的 org.slf4j 模块
+    // 重复导出同名包, 触发 JPMS ResolutionException 致服务器无法启动。
+    // 注: 仅从输出 jar 剔除 (文件级 exclude), slf4j 仍在编译 classpath (Forge 提供), 不影响编译。
+    exclude 'org/slf4j/**'
+    // 剔除 jetty-http 捆绑的 javax/servlet 遗留 XML schema 资源 (.xsd/.dtd, 无 .class):
+    // 纯编程式用 jetty 不需要, 避免 Forge SecureJar 对资源目录的潜在边界问题 + 去 bloat。
+    exclude 'javax/servlet/**'
+    // 剔除被 shade 库带入的 module-info (JPMS 在 Forge 模块层下会冲突, 且对 fat jar 无意义)
+    exclude 'module-info.class'
+    exclude 'META-INF/versions/*/module-info.class'
+
     manifest.inheritFrom tasks.jar.manifest
 }
 
