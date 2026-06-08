@@ -108,17 +108,55 @@ public final class PlayerLoginListener {
         }
         String name = player.getGameProfile().getName();
         String uuid = player.getUUID().toString();
+        String ip = formatRemoteAddress(player.connection.connection.getRemoteAddress());
+        MinecraftServer server = player.getServer();
 
+        // 白名单拦截 (进服瞬间踢人).
+        // 说明: 理论上 PreLogin 阶段的 PlayerNegotiationEvent 能更早拒绝, 但实测在部分整合包环境
+        // (如 Sinytra Connector) 该事件不被触发, 故以 PlayerLoggedInEvent (核心事件, 必然触发) 兜底,
+        // 非白名单玩家进服后立即被踢。两个事件并存形成防御纵深。
+        whitelistManager.isPlayerWhitelistedOffline(name, uuid).thenAccept(allowed -> {
+            if (server == null) {
+                return;
+            }
+            server.execute(() -> {
+                if (Boolean.TRUE.equals(allowed)) {
+                    processWhitelistedJoin(player, name, uuid);
+                } else {
+                    player.connection.disconnect(Component.literal(formatKickMessage(name)));
+                    logger.warn("拒绝玩家进入 (未在白名单): {} ({}) IP: {}", name, uuid, ip);
+                    logUnauthorizedAccess(name, uuid, ip);
+                }
+            });
+        }).exceptionally(t -> {
+            // 查询异常: 严格模式踢人, 宽松模式放行 (与 PreLogin 路径一致)
+            if (server != null) {
+                server.execute(() -> {
+                    if (config.isWhitelistStrictMode()) {
+                        player.connection.disconnect(Component.literal("§c白名单验证失败, 请稍后重试"));
+                        logger.warn("[Whitelist] 严格模式踢出 (查询异常): {} - {}", name, t.getMessage());
+                    } else {
+                        logger.warn("[Whitelist] 宽松模式放行 (查询异常): {} - {}", name, t.getMessage());
+                    }
+                });
+            }
+            return null;
+        });
+    }
+
+    /**
+     * 白名单内玩家的加入后处理: UUID 补全 + 欢迎 + 通知 (对应 v1 onPlayerJoin)。
+     * 调用前已确认在白名单中 (isPlayerWhitelistedOffline 命中)。
+     */
+    private void processWhitelistedJoin(ServerPlayer player, String name, String uuid) {
         whitelistManager.getPlayerByUuid(uuid).thenCompose(byUuid -> {
             if (byUuid.isPresent()) {
                 handleJoin(player, byUuid.get());
                 return CompletableFuture.completedFuture(null);
             }
-            // UUID 未命中, 尝试按名字找 (可能是 UUID 待补充的条目)
+            // UUID 未命中, 按名字找 (UUID 待补充的条目), 补全 UUID
             return whitelistManager.getPlayerByName(name).thenAccept(byName -> {
                 if (byName.isEmpty()) {
-                    // 不在白名单却能进服: 白名单未启用或被放行, 不处理
-                    logger.debug("玩家 {} 不在白名单, 跳过加入处理", name);
                     return;
                 }
                 WhitelistEntry entry = byName.get();
