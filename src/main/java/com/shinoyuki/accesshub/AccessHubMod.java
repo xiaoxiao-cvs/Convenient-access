@@ -8,8 +8,8 @@ import com.shinoyuki.accesshub.api.ApiRouter;
 import com.shinoyuki.accesshub.api.OperationLogApiController;
 import com.shinoyuki.accesshub.api.PlayerDataHandler;
 import com.shinoyuki.accesshub.api.PlayerDataHandlerImpl;
-import com.shinoyuki.accesshub.api.ServerPerformanceHandler;
-import com.shinoyuki.accesshub.api.ServerPerformanceHandlerImpl;
+import com.shinoyuki.accesshub.api.ServerInfoHandler;
+import com.shinoyuki.accesshub.api.ServerInfoHandlerImpl;
 import com.shinoyuki.accesshub.api.UserApiController;
 import com.shinoyuki.accesshub.integration.SparkIntegration;
 import com.shinoyuki.accesshub.api.WhitelistApiController;
@@ -114,13 +114,13 @@ public final class AccessHubMod {
         OperationLogApiController operationLogController = new OperationLogApiController(operationLogDao);
         AdminAuthController adminAuthController = new AdminAuthController(adminAuthService);
         PlayerDataHandler playerDataHandler = new PlayerDataHandlerImpl(server);
-        // Spark 性能监测 (软依赖, 未装 spark mod 时降级为 JVM 数据)
+        // Spark 性能监测 (软依赖, 未装 spark mod 时降级为 JVM 数据) + 在线玩家列表
         sparkIntegration = new SparkIntegration(server);
-        ServerPerformanceHandler performanceHandler = new ServerPerformanceHandlerImpl(sparkIntegration);
+        ServerInfoHandler serverInfoHandler = new ServerInfoHandlerImpl(server, sparkIntegration);
 
         ApiRouter apiRouter = new ApiRouter(
                 whitelistController, userController,
-                playerDataHandler, performanceHandler,
+                playerDataHandler, serverInfoHandler,
                 operationLogController, adminAuthController,
                 config
         );

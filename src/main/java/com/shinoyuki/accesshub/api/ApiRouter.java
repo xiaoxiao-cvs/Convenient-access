@@ -22,19 +22,19 @@ public class ApiRouter extends HttpServlet {
     private final WhitelistApiController whitelistController;
     private final UserApiController userController;
     private final PlayerDataHandler playerDataController;
-    private final ServerPerformanceHandler performanceHandler;
+    private final ServerInfoHandler serverInfoHandler;
     private final OperationLogApiController operationLogController;
     private AdminAuthController adminAuthController;
     private final AccessHubConfig configManager;
 
     public ApiRouter(WhitelistApiController whitelistController, UserApiController userController,
-                     PlayerDataHandler playerDataController, ServerPerformanceHandler performanceHandler,
+                     PlayerDataHandler playerDataController, ServerInfoHandler serverInfoHandler,
                      OperationLogApiController operationLogController,
                      AdminAuthController adminAuthController, AccessHubConfig configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
         this.playerDataController = playerDataController;
-        this.performanceHandler = performanceHandler;
+        this.serverInfoHandler = serverInfoHandler;
         this.operationLogController = operationLogController;
         this.adminAuthController = adminAuthController;
         this.configManager = configManager;
@@ -180,10 +180,18 @@ public class ApiRouter extends HttpServlet {
             }
             // 服务器性能监测路由 (Spark + JVM)
             else if (path.equals("/api/v1/server/performance")) {
-                if (performanceHandler != null) {
-                    performanceHandler.handleGetPerformance(request, response);
+                if (serverInfoHandler != null) {
+                    serverInfoHandler.handleGetPerformance(request, response);
                 } else {
-                    send503Response(response, "Performance handler not available");
+                    send503Response(response, "Server info handler not available");
+                }
+            }
+            // 在线玩家列表路由
+            else if (path.equals("/api/v1/server/players")) {
+                if (serverInfoHandler != null) {
+                    serverInfoHandler.handleGetPlayers(request, response);
+                } else {
+                    send503Response(response, "Server info handler not available");
                 }
             }
             // 管理员信息查询路由
