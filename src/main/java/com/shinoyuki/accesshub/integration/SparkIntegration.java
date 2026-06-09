@@ -78,7 +78,16 @@ public class SparkIntegration {
             if (!isSparkAvailable()) {
                 return getFallbackPerformanceData();
             }
+            // SparkApi.tps()/mspt()/cpu*() 首次调用会惰性加载匿名内部类 (SparkApi$1..$4, 继承
+            // spark 的 AbstractStatistic)。Forge EventSubclassTransformer 处理这些类时, 用当前
+            // 线程的 contextClassLoader 解析父类层次。本 lambda 跑在 common ForkJoinPool 线程,
+            // 其 TCCL 是系统 AppClassLoader, 解析不到 spark 的 AbstractStatistic, 会刷出
+            // ClassNotFoundException 堆栈 (不影响返回数据, 仅污染日志)。把 TCCL 临时切到加载
+            // SparkApi 的 classloader 让 transformer 能解析父类, 调用后在 finally 还原。
+            Thread current = Thread.currentThread();
+            ClassLoader previousLoader = current.getContextClassLoader();
             try {
+                current.setContextClassLoader(sparkApi.getClass().getClassLoader());
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("source", "spark");
                 data.put("tps", getTpsData());
@@ -91,6 +100,8 @@ public class SparkIntegration {
             } catch (Exception e) {
                 logger.warn("获取 Spark 性能数据失败, 使用 JVM fallback", e);
                 return getFallbackPerformanceData();
+            } finally {
+                current.setContextClassLoader(previousLoader);
             }
         });
     }
