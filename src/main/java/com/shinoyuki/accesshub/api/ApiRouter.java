@@ -23,18 +23,21 @@ public class ApiRouter extends HttpServlet {
     private final UserApiController userController;
     private final PlayerDataHandler playerDataController;
     private final ServerInfoHandler serverInfoHandler;
+    private final ItemIconHandler itemIconHandler;
     private final OperationLogApiController operationLogController;
     private AdminAuthController adminAuthController;
     private final AccessHubConfig configManager;
 
     public ApiRouter(WhitelistApiController whitelistController, UserApiController userController,
                      PlayerDataHandler playerDataController, ServerInfoHandler serverInfoHandler,
+                     ItemIconHandler itemIconHandler,
                      OperationLogApiController operationLogController,
                      AdminAuthController adminAuthController, AccessHubConfig configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
         this.playerDataController = playerDataController;
         this.serverInfoHandler = serverInfoHandler;
+        this.itemIconHandler = itemIconHandler;
         this.operationLogController = operationLogController;
         this.adminAuthController = adminAuthController;
         this.configManager = configManager;
@@ -101,7 +104,9 @@ public class ApiRouter extends HttpServlet {
      */
     private boolean isPublicEndpoint(String path) {
         return path.equals("/api/v1/admin/login") ||
-               path.equals("/api/v1/admin/register");
+               path.equals("/api/v1/admin/register") ||
+               // 物品图标必须公开: <img> 标签无法携带 Authorization/X-API-Key 头
+               path.equals("/api/v1/item-icon");
     }
 
     /**
@@ -192,6 +197,14 @@ public class ApiRouter extends HttpServlet {
                     serverInfoHandler.handleGetPlayers(request, response);
                 } else {
                     send503Response(response, "Server info handler not available");
+                }
+            }
+            // 物品图标路由 (公开, 从 mod jar 抽贴图 PNG)
+            else if (path.equals("/api/v1/item-icon")) {
+                if (itemIconHandler != null) {
+                    itemIconHandler.handle(request, response);
+                } else {
+                    send503Response(response, "Item icon handler not available");
                 }
             }
             // 管理员信息查询路由

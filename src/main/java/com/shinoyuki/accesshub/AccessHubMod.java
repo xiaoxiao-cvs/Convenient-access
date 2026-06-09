@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import com.mojang.logging.LogUtils;
 import com.shinoyuki.accesshub.api.AdminAuthController;
 import com.shinoyuki.accesshub.api.ApiRouter;
+import com.shinoyuki.accesshub.api.ItemIconHandler;
 import com.shinoyuki.accesshub.api.OperationLogApiController;
 import com.shinoyuki.accesshub.api.PlayerDataHandler;
 import com.shinoyuki.accesshub.api.PlayerDataHandlerImpl;
@@ -117,10 +118,13 @@ public final class AccessHubMod {
         // Spark 性能监测 (软依赖, 未装 spark mod 时降级为 JVM 数据) + 在线玩家列表
         sparkIntegration = new SparkIntegration(server);
         ServerInfoHandler serverInfoHandler = new ServerInfoHandlerImpl(server, sparkIntegration);
+        // 物品图标抽取 (无状态: 仅依赖 ModList + 资源 IO, 内置 PNG 缓存)
+        ItemIconHandler itemIconHandler = new ItemIconHandler();
 
         ApiRouter apiRouter = new ApiRouter(
                 whitelistController, userController,
                 playerDataHandler, serverInfoHandler,
+                itemIconHandler,
                 operationLogController, adminAuthController,
                 config
         );
