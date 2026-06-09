@@ -45,7 +45,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 数据库版本
-    private static final int CURRENT_VERSION = 2; // 增加版本以支持管理员认证系统
+    private static final int CURRENT_VERSION = 3; // v3: 玩家离线认证表 player_auth
 
     public DatabaseManager(File dataFolder) {
         this.dataFolder = dataFolder;
@@ -170,6 +170,7 @@ public class DatabaseManager {
             "schema/admin_users.sql",
             "schema/admin_sessions.sql",
             "schema/auth_logs.sql",
+            "schema/player_auth.sql",
             "schema/indexes.sql"
         };
         

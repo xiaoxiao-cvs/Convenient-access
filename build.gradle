@@ -80,6 +80,11 @@ dependencies {
     // 持久化 (SQLite 单文件) — 必须 shade 进 jar, 含各平台原生库
     shade 'org.xerial:sqlite-jdbc:3.42.0.0'
 
+    // 密码哈希 (玩家离线认证) — 纯 Java bcrypt, 必须 shade 进 jar, Forge 运行期不提供。
+    // 传递依赖 at.favre.lib:bytes 会一并被 shade。两者均含 module-info.class,
+    // 由下方 shadowJar 既有的 module-info exclude 覆盖, 无需新增 exclude。
+    shade 'at.favre.lib:bcrypt:0.10.2'
+
     // Night Config: Forge 1.20.1 自带 3.6.4 (传递依赖), 运行期已在 classpath。
     // 用 compileOnly 显式声明编译期可见, 不打包 (避免与 Forge 版本冲突)。
     compileOnly 'com.electronwill.night-config:core:3.6.4'
@@ -138,6 +143,10 @@ tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.Shadow
     // 不 relocate org.sqlite: sqlite-jdbc 按包路径加载 org/sqlite/native/** 原生库, relocate 会破坏。
     // 不 relocate jakarta.servlet: 无其它 provider, 无冲突风险。
     relocate 'org.eclipse.jetty', 'com.shinoyuki.accesshub.libs.jetty'
+    // relocate bcrypt + 其传递依赖 bytes: 避免与其它 mod 各自 shade 的同库版本在
+    // 同一类加载器下重复导出包冲突。bcrypt 不按包路径加载原生资源, relocate 安全。
+    relocate 'at.favre.lib.crypto', 'com.shinoyuki.accesshub.libs.favre.crypto'
+    relocate 'at.favre.lib.bytes', 'com.shinoyuki.accesshub.libs.favre.bytes'
 
     // 合并 META-INF/services (Jetty 的 ServiceLoader 文件 + sqlite 的 java.sql.Driver), 否则被覆盖丢失
     mergeServiceFiles()

@@ -16,12 +16,16 @@ import com.shinoyuki.accesshub.integration.SparkIntegration;
 import com.shinoyuki.accesshub.api.WhitelistApiController;
 import com.shinoyuki.accesshub.auth.AdminAuthService;
 import com.shinoyuki.accesshub.auth.LoginAttemptService;
+import com.shinoyuki.accesshub.auth.PlayerAuthDao;
+import com.shinoyuki.accesshub.auth.PlayerAuthService;
 import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
 import com.shinoyuki.accesshub.backup.BackupManager;
 import com.shinoyuki.accesshub.command.AccessHubCommand;
+import com.shinoyuki.accesshub.command.AuthCommand;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.config.AccessHubConfigImpl;
 import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.event.PlayerAuthListener;
 import com.shinoyuki.accesshub.event.PlayerLoginListener;
 import com.shinoyuki.accesshub.http.HttpServer;
 import com.shinoyuki.accesshub.operation.OperationLogDao;
@@ -49,6 +53,7 @@ public final class AccessHubMod {
     private DatabaseManager databaseManager;
     private WhitelistManager whitelistManager;
     private AdminAuthService adminAuthService;
+    private PlayerAuthService playerAuthService;
     private HttpServer httpServer;
     private BackupManager backupManager;
     private SparkIntegration sparkIntegration;
@@ -109,6 +114,10 @@ public final class AccessHubMod {
                 loginAttempt
         );
 
+        // 玩家离线认证 (游戏内强制登录, 与管理员 HTTP 认证相互独立). 数据库已就绪即可构建.
+        PlayerAuthDao playerAuthDao = new PlayerAuthDao(databaseManager);
+        playerAuthService = new PlayerAuthService(playerAuthDao, config);
+
         // 6. API Controllers
         WhitelistApiController whitelistController = new WhitelistApiController(whitelistManager, operationLogDao);
         UserApiController userController = new UserApiController(tokenManager, whitelistManager);
@@ -145,6 +154,12 @@ public final class AccessHubMod {
         MinecraftForge.EVENT_BUS.register(loginListener);
         LOGGER.info("白名单登录监听器已注册到事件总线");
 
+        // 8b. 玩家离线认证拦截器 (未认证全限制 + 冻结 + 超时踢出).
+        // 注册到 EVENT_BUS 即生效; 内部各 @SubscribeEvent 均先判 auth.enabled 再处理, 禁用时零开销放行.
+        PlayerAuthListener authListener = new PlayerAuthListener(config, playerAuthService);
+        MinecraftForge.EVENT_BUS.register(authListener);
+        LOGGER.info("玩家离线认证拦截器已注册到事件总线 (auth.enabled={})", config.isPlayerAuthEnabled());
+
         // 9. 数据库自动备份 (定时备份 whitelist.db, 与数据库同目录)
         backupManager = new BackupManager(baseDir.toFile(), config);
         backupManager.initialize();
@@ -172,7 +187,10 @@ public final class AccessHubMod {
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         AccessHubCommand.register(event.getDispatcher(), this);
-        LOGGER.info("AccessHub 命令已注册: /accesshub (alias: /ca /ahub)");
+        // 玩家自助认证命令 (不要求 OP). 无条件注册, 依赖在执行期经 getPlayerAuthService 惰性解析,
+        // 因 RegisterCommandsEvent 在 initialize 之前的 bootstrap 即触发, 与 AccessHubCommand 同模式.
+        AuthCommand.register(event.getDispatcher(), this);
+        LOGGER.info("AccessHub 命令已注册: /accesshub (alias: /ca /ahub), /register /login /changepassword (别名 /reg /l)");
     }
 
     /**
@@ -194,5 +212,12 @@ public final class AccessHubMod {
      */
     public WhitelistManager getWhitelistManager() {
         return whitelistManager;
+    }
+
+    /**
+     * 暴露给命令层使用 (auth 管理子命令). mod 启动失败时返回 null.
+     */
+    public PlayerAuthService getPlayerAuthService() {
+        return playerAuthService;
     }
 }

@@ -57,6 +57,12 @@ public interface AccessHubConfig {
     boolean isWelcomeMessageEnabled();
     String getWelcomeMessage();
 
+    // 玩家离线认证 (游戏内强制登录, 与上方管理员 HTTP API 登录限流相互独立)
+    boolean isPlayerAuthEnabled();
+    int getPlayerAuthTimeoutSeconds();
+    int getPlayerAuthMaxAttempts();
+    int getPlayerAuthLockMinutes();
+
     // 数据库自动备份
     boolean isBackupEnabled();
     String getBackupSchedule();      // "天:小时:分钟", 如 "0:2:0" = 每天 02:00

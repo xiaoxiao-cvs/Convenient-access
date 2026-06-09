@@ -106,6 +106,16 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("whitelist.welcome-message.enabled", true);
         config.set("whitelist.welcome-message.text", "&a欢迎回到服务器！\n&7玩家: &e{player}");
 
+        config.set("auth.enabled", true);
+        config.setComment("auth.enabled",
+                " 玩家离线认证总开关: 开启后进服玩家必须 /register 注册并 /login 登录, 未认证前全限制");
+        config.set("auth.timeout-seconds", 60);
+        config.setComment("auth.timeout-seconds", " 进服后未在此秒数内完成认证则踢出");
+        config.set("auth.max-attempts", 5);
+        config.setComment("auth.max-attempts", " 登录密码连续错误上限, 达到后锁定");
+        config.set("auth.lock-minutes", 10);
+        config.setComment("auth.lock-minutes", " 达到错误上限后的锁定时长 (分钟)");
+
         config.set("backup.enabled", true);
         config.set("backup.schedule", "0:2:0");
         config.setComment("backup.schedule", " 备份计划 \"天:小时:分钟\", 如 0:2:0=每天02:00, 1:0:0=每隔1天的00:00");
@@ -212,6 +222,11 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     public String getWelcomeMessage() {
         return config.getOrElse("whitelist.welcome-message.text", "&a欢迎回到服务器！\n&7玩家: &e{player}");
     }
+
+    @Override public boolean isPlayerAuthEnabled()       { return config.getOrElse("auth.enabled", true); }
+    @Override public int     getPlayerAuthTimeoutSeconds(){ return config.getIntOrElse("auth.timeout-seconds", 60); }
+    @Override public int     getPlayerAuthMaxAttempts()  { return config.getIntOrElse("auth.max-attempts", 5); }
+    @Override public int     getPlayerAuthLockMinutes()  { return config.getIntOrElse("auth.lock-minutes", 10); }
 
     @Override public boolean isBackupEnabled()       { return config.getOrElse("backup.enabled", true); }
     @Override public String  getBackupSchedule()     { return config.getOrElse("backup.schedule", "0:2:0"); }

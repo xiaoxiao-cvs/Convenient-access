@@ -1,10 +1,14 @@
 package com.shinoyuki.accesshub.command;
 
+import java.util.concurrent.CompletableFuture;
+
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.tree.LiteralCommandNode;
 import com.shinoyuki.accesshub.AccessHubMod;
+import com.shinoyuki.accesshub.auth.PlayerAuthRecord;
+import com.shinoyuki.accesshub.auth.PlayerAuthService;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.http.HttpServer;
 import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
@@ -57,6 +61,16 @@ public final class AccessHubCommand {
                                                 .executes(ctx -> doWhitelistCheck(ctx, mod))))
                                 .then(Commands.literal("list")
                                         .executes(ctx -> doWhitelistList(ctx, mod))))
+                        .then(Commands.literal("auth")
+                                .then(Commands.literal("reset")
+                                        .then(Commands.argument("player", StringArgumentType.word())
+                                                .executes(ctx -> doAuthReset(ctx, mod))))
+                                .then(Commands.literal("unregister")
+                                        .then(Commands.argument("player", StringArgumentType.word())
+                                                .executes(ctx -> doAuthReset(ctx, mod))))
+                                .then(Commands.literal("info")
+                                        .then(Commands.argument("player", StringArgumentType.word())
+                                                .executes(ctx -> doAuthInfo(ctx, mod)))))
                         .then(Commands.literal("help").executes(AccessHubCommand::doHelp))
                         .executes(AccessHubCommand::doHelp)
         );
@@ -232,6 +246,75 @@ public final class AccessHubCommand {
         return 1;
     }
 
+    // ==================== 玩家认证管理子命令 ====================
+    // 离线认证管理 (清密码 / 注销 / 查询). DB 操作阻塞, 放 supplyAsync 后回主线程发包。
+
+    /** auth reset / auth unregister: 删除玩家认证记录, 在线则踢出已认证会话强制重新认证。 */
+    private static int doAuthReset(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
+        CommandSourceStack src = ctx.getSource();
+        PlayerAuthService auth = mod.getPlayerAuthService();
+        if (auth == null) {
+            src.sendFailure(Component.literal("玩家认证系统未就绪 (未启用或 mod 启动失败)"));
+            return 0;
+        }
+        String name = StringArgumentType.getString(ctx, "player");
+        MinecraftServer server = src.getServer();
+        CompletableFuture.supplyAsync(() -> auth.adminReset(name))
+                .thenAccept(removed -> server.execute(() -> {
+                    if (removed) {
+                        // 删除记录后, 在线同名玩家立即降级为未认证 (清会话, tick 冻结接管)
+                        ServerPlayer online = server.getPlayerList().getPlayerByName(name);
+                        if (online != null) {
+                            auth.clearSession(online.getUUID());
+                            online.sendSystemMessage(
+                                    Component.literal("§c你的账号已被管理员重置, 请重新 /register"));
+                        }
+                        src.sendSuccess(() -> Component.literal("已重置玩家认证: " + name)
+                                .withStyle(ChatFormatting.GREEN), true);
+                    } else {
+                        src.sendSuccess(() -> Component.literal(name + " 没有认证记录")
+                                .withStyle(ChatFormatting.YELLOW), false);
+                    }
+                }))
+                .exceptionally(t -> {
+                    reply(src, Component.literal("重置异常: " + t.getMessage()).withStyle(ChatFormatting.RED));
+                    return null;
+                });
+        return 1;
+    }
+
+    /** auth info: 查询玩家认证记录摘要 (不展示密码哈希)。 */
+    private static int doAuthInfo(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
+        CommandSourceStack src = ctx.getSource();
+        PlayerAuthService auth = mod.getPlayerAuthService();
+        if (auth == null) {
+            src.sendFailure(Component.literal("玩家认证系统未就绪 (未启用或 mod 启动失败)"));
+            return 0;
+        }
+        String name = StringArgumentType.getString(ctx, "player");
+        MinecraftServer server = src.getServer();
+        CompletableFuture.supplyAsync(() -> auth.adminInfo(name))
+                .thenAccept(opt -> server.execute(() -> {
+                    if (opt.isEmpty()) {
+                        src.sendSuccess(() -> Component.literal(name + " 未注册").withStyle(ChatFormatting.YELLOW), false);
+                        return;
+                    }
+                    PlayerAuthRecord r = opt.get();
+                    StringBuilder sb = new StringBuilder("§6=== 认证信息: " + r.getUsername() + " ===");
+                    sb.append("\n§7注册时间: §f").append(r.getRegisteredAt());
+                    sb.append("\n§7最后登录: §f").append(r.getLastLoginAt());
+                    sb.append("\n§7最后登录 IP: §f").append(r.getLastLoginIp());
+                    sb.append("\n§7失败计数: §f").append(r.getFailCount());
+                    sb.append("\n§7锁定至: §f").append(r.getLockedUntil());
+                    src.sendSuccess(() -> Component.literal(sb.toString()), false);
+                }))
+                .exceptionally(t -> {
+                    reply(src, Component.literal("查询异常: " + t.getMessage()).withStyle(ChatFormatting.RED));
+                    return null;
+                });
+        return 1;
+    }
+
     /** 异步回调结果回服务器主线程发送给命令源 (sendSuccess 须在主线程调用)。 */
     private static void reply(CommandSourceStack src, Component message) {
         MinecraftServer server = src.getServer();
@@ -247,6 +330,9 @@ public final class AccessHubCommand {
         source.sendSuccess(() -> usage("/accesshub whitelist remove <名字>", "移除白名单"), false);
         source.sendSuccess(() -> usage("/accesshub whitelist check <名字>", "检查是否在白名单"), false);
         source.sendSuccess(() -> usage("/accesshub whitelist list", "列出白名单 (前 10)"), false);
+        source.sendSuccess(() -> usage("/accesshub auth reset <玩家>", "清除密码强制重注册"), false);
+        source.sendSuccess(() -> usage("/accesshub auth unregister <玩家>", "注销玩家认证记录"), false);
+        source.sendSuccess(() -> usage("/accesshub auth info <玩家>", "查询玩家认证信息"), false);
         source.sendSuccess(() -> usage("/accesshub help", "显示此帮助"), false);
         source.sendSuccess(() -> Component.literal("别名: /ca /ahub").withStyle(ChatFormatting.GRAY), false);
         return 1;
