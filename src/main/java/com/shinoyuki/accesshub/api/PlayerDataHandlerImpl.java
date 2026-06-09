@@ -1,11 +1,15 @@
 package com.shinoyuki.accesshub.api;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -20,20 +24,27 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.player.Abilities;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * /api/v1/player 的 Forge 实现, 替代 v1 Bukkit PlayerDataApiController。
  *
  * 用 MinecraftServer / ServerPlayer API 采集在线玩家详细数据; 离线玩家经 GameProfileCache
- * 返回 name+uuid 最小集 (读 playerdata NBT 的完整离线数据留待后续)。
+ * 取 UUID 后直接读 playerdata/&lt;uuid&gt;.dat 的压缩 NBT, 还原与在线一致结构的完整快照。
  *
  * 线程模型: HTTP 请求在 Jetty 线程到达, 但读取游戏状态必须在服务器主线程,
  * 故经 server.execute() 提交采集任务 + CompletableFuture 取回结果 (对应 v1 的 Bukkit scheduler 模式)。
@@ -183,18 +194,160 @@ public final class PlayerDataHandlerImpl implements PlayerDataHandler {
         return data;
     }
 
-    /** 采集离线玩家最小信息 (GameProfileCache 仅有 name+uuid)。 */
-    private Map<String, Object> collectOffline(String playerName) {
+    /**
+     * 采集离线玩家完整快照: GameProfileCache 取 UUID 后直接读 playerdata/&lt;uuid&gt;.dat 的压缩 NBT。
+     *
+     * <p>NBT 键名/槽位编码均按 MC 1.20.1 官方映射磁盘格式硬编码 (这些字符串在任何映射下不变):
+     * 药水列表键为大写 {@code ActiveEffects}, 子项 {@code Id} 为数字效果 ID (经 {@code getByte&0xFF});
+     * 副手物品 NBT 槽位号为 150 (非运行期容器层的 -106); 饱食字段平铺在根 compound。
+     *
+     * <p>异常策略: profile 缺失 / .dat 不存在 -> 返回 null (上层 404, 区分"从未登录");
+     * 文件存在但 NBT 损坏 -> {@link NbtIo#readCompressed(File)} 抛 IOException 自然冒泡 (上层 500),
+     * 不吞掉真实损坏返回半截假数据。
+     */
+    private Map<String, Object> collectOffline(String playerName) throws IOException {
         Optional<GameProfile> profile = server.getProfileCache().get(playerName);
         if (profile.isEmpty()) {
-            return null; // 触发 404
+            return null; // 触发 404: 缓存里没有, 视为不存在
         }
+        UUID uuid = profile.get().getId();
+
+        // playerdata 目录在世界根 (单机 = saves/<world>/playerdata), 文件名 = <uuid 带连字符>.dat
+        Path playerDataDir = server.getWorldPath(LevelResource.PLAYER_DATA_DIR);
+        File datFile = playerDataDir.resolve(uuid.toString() + ".dat").toFile();
+        if (!datFile.exists() || !datFile.isFile()) {
+            return null; // 触发 404: profile 进过缓存但从未生成 playerdata (从未真正登录)
+        }
+
+        // gzip 压缩 NBT; 损坏会抛 IOException (不返回 null)
+        CompoundTag root = NbtIo.readCompressed(datFile);
+
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("playerName", profile.get().getName());
-        data.put("uuid", profile.get().getId().toString());
+        data.put("uuid", uuid.toString());
         data.put("online", false);
-        data.put("note", "离线玩家仅返回基本信息; 完整数据需玩家在线");
+        data.put("source", "offline-nbt");
+        data.put("lastSaved", Instant.ofEpochMilli(datFile.lastModified()).toString());
+
+        // 游戏模式: playerGameType (int) -> GameType.byId.getName() (越界归 SURVIVAL)
+        data.put("gameMode", GameType.byId(root.getInt("playerGameType")).getName());
+
+        // 位置: Pos = List of 3 double, Rotation = List of 2 float
+        Map<String, Object> location = new LinkedHashMap<>();
+        location.put("dimension", root.getString("Dimension"));
+        ListTag pos = root.getList("Pos", Tag.TAG_DOUBLE);
+        location.put("x", pos.getDouble(0));
+        location.put("y", pos.getDouble(1));
+        location.put("z", pos.getDouble(2));
+        ListTag rotation = root.getList("Rotation", Tag.TAG_FLOAT);
+        location.put("yaw", rotation.getFloat(0));
+        location.put("pitch", rotation.getFloat(1));
+        data.put("location", location);
+
+        Map<String, Object> vitals = new LinkedHashMap<>();
+        vitals.put("health", root.getFloat("Health"));
+        // maxHealth 来自 generic.max_health 属性, 离线 NBT 无法可靠还原 (默认 20.0, 属性修饰符在 Attributes 里需逐项解析);
+        // 与在线 player.getMaxHealth() 不等价, 故离线省略 maxHealth 字段, 避免给前端假值。
+        vitals.put("foodLevel", root.getInt("foodLevel"));
+        vitals.put("saturation", root.getFloat("foodSaturationLevel"));
+        vitals.put("exhaustion", root.getFloat("foodExhaustionLevel"));
+        vitals.put("level", root.getInt("XpLevel"));
+        vitals.put("exp", root.getFloat("XpP"));
+        vitals.put("totalExperience", root.getInt("XpTotal"));
+        vitals.put("remainingAir", (int) root.getShort("Air"));
+        vitals.put("fireTicks", (int) root.getShort("Fire"));
+        data.put("vitals", vitals);
+
+        // 状态: 仅含 abilities 里的持久字段; sneaking/sprinting/swimming/gliding 是运行期瞬时状态, NBT 不落盘, 离线省略
+        CompoundTag abilities = root.getCompound("abilities");
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("flying", abilities.getBoolean("flying"));
+        state.put("allowFlight", abilities.getBoolean("mayfly"));
+        state.put("invulnerable", abilities.getBoolean("invulnerable"));
+        state.put("walkSpeed", abilities.getFloat("walkSpeed"));
+        state.put("flySpeed", abilities.getFloat("flySpeed"));
+        data.put("state", state);
+
+        // 药水: 1.20.1 键为大写 ActiveEffects (非 1.20.2+ 的 active_effects); 子项 Id 为数字 ID
+        List<Map<String, Object>> effects = new ArrayList<>();
+        ListTag activeEffects = root.getList("ActiveEffects", Tag.TAG_COMPOUND);
+        for (int i = 0; i < activeEffects.size(); i++) {
+            CompoundTag effectTag = activeEffects.getCompound(i);
+            // 与在线读取一致: getByte & 0xFF -> MobEffect.byId, 再转注册键, 保持 type 字段格式一致
+            MobEffect effect = MobEffect.byId(effectTag.getByte("Id") & 0xFF);
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("type", String.valueOf(BuiltInRegistries.MOB_EFFECT.getKey(effect)));
+            e.put("amplifier", (int) effectTag.getByte("Amplifier"));
+            e.put("duration", effectTag.getInt("Duration"));
+            e.put("ambient", effectTag.getBoolean("Ambient"));
+            // ShowParticles 默认 true (缺省时); 与在线 effect.isVisible() 对齐 visible 字段
+            e.put("visible", !effectTag.contains("ShowParticles", Tag.TAG_BYTE) || effectTag.getBoolean("ShowParticles"));
+            e.put("showIcon", !effectTag.contains("ShowIcon", Tag.TAG_BYTE) || effectTag.getBoolean("ShowIcon"));
+            effects.add(e);
+        }
+        data.put("potionEffects", effects);
+
+        data.put("inventory", collectInventoryFromNbt(root.getList("Inventory", Tag.TAG_COMPOUND)));
+        // EnderItems 可选 (玩家从未开过末影箱时无此键); 守卫同 Player.readAdditionalSaveData
+        if (root.contains("EnderItems", Tag.TAG_LIST)) {
+            data.put("enderChest", collectContainerFromNbt(root.getList("EnderItems", Tag.TAG_COMPOUND)));
+        } else {
+            data.put("enderChest", new ArrayList<>());
+        }
+
         return data;
+    }
+
+    /**
+     * 从离线 Inventory ListTag 还原背包, 输出结构与在线 {@link #collectInventory(Inventory)} 一致 (main/armor/offHand)。
+     * 槽位编码 (Inventory.save 磁盘格式): 0-35 主背包(含快捷栏), 100-103 盔甲(feet/legs/chest/head), 150 副手。
+     */
+    private Map<String, Object> collectInventoryFromNbt(ListTag inventory) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        List<Map<String, Object>> main = new ArrayList<>();
+        List<Map<String, Object>> armor = new ArrayList<>();
+        String[] armorSlots = {"feet", "legs", "chest", "head"};
+
+        for (int i = 0; i < inventory.size(); i++) {
+            CompoundTag itemTag = inventory.getCompound(i);
+            int slot = itemTag.getByte("Slot") & 255;
+            ItemStack stack = ItemStack.of(itemTag); // 非法标签返回 EMPTY, 不抛异常
+            if (slot >= 0 && slot < 36) {
+                Map<String, Object> item = convertItem(stack, String.valueOf(slot));
+                if (item != null) {
+                    main.add(item);
+                }
+            } else if (slot >= 100 && slot <= 103) {
+                Map<String, Object> item = convertItem(stack, armorSlots[slot - 100]);
+                if (item != null) {
+                    armor.add(item);
+                }
+            } else if (slot == 150) {
+                Map<String, Object> off = convertItem(stack, "offhand");
+                if (off != null) {
+                    result.put("offHand", off);
+                }
+            }
+        }
+        result.put("main", main);
+        result.put("armor", armor);
+        return result;
+    }
+
+    /**
+     * 从离线 EnderItems ListTag 还原末影箱, 输出形状与在线 {@link #collectContainer(net.minecraft.world.Container)} 一致 (平铺 list)。
+     */
+    private List<Map<String, Object>> collectContainerFromNbt(ListTag container) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (int i = 0; i < container.size(); i++) {
+            CompoundTag itemTag = container.getCompound(i);
+            int slot = itemTag.getByte("Slot") & 255;
+            Map<String, Object> item = convertItem(ItemStack.of(itemTag), String.valueOf(slot));
+            if (item != null) {
+                items.add(item);
+            }
+        }
+        return items;
     }
 
     private Map<String, Object> collectInventory(Inventory inv) {
