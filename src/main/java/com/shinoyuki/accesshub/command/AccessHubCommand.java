@@ -16,6 +16,7 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 
 /**
  * AccessHub 服务端命令注册.
@@ -142,8 +143,10 @@ public final class AccessHubCommand {
             return 0;
         }
         String name = StringArgumentType.getString(ctx, "name");
-        // UUID 留空, 由玩家首次登录时 PlayerLoggedInEvent 补全
-        wm.addPlayerByNameOnly(name, src.getTextName(), "CONSOLE", WhitelistEntry.Source.ADMIN)
+        // 渠道标记 (存入 addedByUuid): 游戏内玩家用其真实 uuid (前端识别为"游戏内"), 控制台用 CONSOLE ("终端")
+        String operatorUuid = src.getEntity() instanceof ServerPlayer sp ? sp.getStringUUID() : "CONSOLE";
+        // 被加玩家的 UUID 留空, 由其首次登录时 PlayerLoggedInEvent 补全
+        wm.addPlayerByNameOnly(name, src.getTextName(), operatorUuid, WhitelistEntry.Source.ADMIN)
                 .thenAccept(ok -> reply(src, ok
                         ? Component.literal("已添加 " + name + " 到白名单 (UUID 待首次登录补全)").withStyle(ChatFormatting.GREEN)
                         : Component.literal("添加失败: " + name + " 可能已在白名单中").withStyle(ChatFormatting.RED)))

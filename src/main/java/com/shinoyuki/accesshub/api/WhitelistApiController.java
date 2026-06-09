@@ -18,6 +18,7 @@ import com.google.gson.JsonParser;
 import com.google.gson.TypeAdapter;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
+import com.shinoyuki.accesshub.auth.AdminUser;
 import com.shinoyuki.accesshub.operation.OperationLogDao;
 import com.shinoyuki.accesshub.utils.UuidUtils;
 import com.shinoyuki.accesshub.whitelist.BatchOperation;
@@ -126,9 +127,24 @@ public class WhitelistApiController {
             }
             
             String name = json.get("name").getAsString();
-            String addedByName = json.has("added_by_name") ? json.get("added_by_name").getAsString() : "API";
-            String addedByUuid = json.has("added_by_uuid") ? json.get("added_by_uuid").getAsString() : "00000000-0000-0000-0000-000000000000";
             String sourceStr = json.get("source").getAsString();
+
+            // 操作者服务端权威记录: JWT 登录的网页管理员优先 (从 ApiRouter 设的 currentUser 属性取,
+            // 客户端无法伪造); 否则按调用方处理。addedByUuid 兼作渠道标记: WEBUI=网页后台, API=程序调用。
+            String addedByName;
+            String addedByUuid;
+            Object currentUser = request.getAttribute("currentUser");
+            if (currentUser instanceof AdminUser admin) {
+                String displayName = admin.getDisplayName();
+                addedByName = (displayName != null && !displayName.isEmpty()) ? displayName : admin.getUsername();
+                addedByUuid = "WEBUI";
+            } else if (json.has("added_by_name")) {
+                addedByName = json.get("added_by_name").getAsString();
+                addedByUuid = json.has("added_by_uuid") ? json.get("added_by_uuid").getAsString() : "API";
+            } else {
+                addedByName = "API";
+                addedByUuid = "API";
+            }
             
             // 处理时间戳 - 如果前端提供则使用，否则使用当前时间
             LocalDateTime addedAt;
