@@ -171,8 +171,9 @@ public class WhitelistManager {
                         }
                     }
                     
-                    // 更新缓存
+                    // 更新缓存 (双索引: uuid key + name:<小写> key, 与 loadCache 一致, 保证按名查询命中)
                     cache.put(uuid, entry);
+                    cache.put("name:" + name.toLowerCase(), entry);
                     logger.info("添加玩家到白名单: {} ({})", name, uuid);
                     return true;
                 }
@@ -200,11 +201,10 @@ public class WhitelistManager {
                 
                 int affected = stmt.executeUpdate();
                 if (affected > 0) {
-                    // 更新缓存
-                    WhitelistEntry removed = cache.remove(uuid);
-                    if (removed != null) {
-                        logger.info("从白名单移除玩家: {} ({})", removed.getName(), uuid);
-                    }
+                    // 清缓存: 双索引下同一玩家既有 uuid key 也有 name:<小写> key, 按 uuid 全部清掉
+                    // (修复: 原仅 remove(uuid), 残留 name: key 会让按名查询/去重仍命中已删玩家)
+                    cache.entrySet().removeIf(e -> e.getValue() != null && uuid.equals(e.getValue().getUuid()));
+                    logger.info("从白名单移除玩家: {}", uuid);
                     return true;
                 }
                 return false;
@@ -223,31 +223,21 @@ public class WhitelistManager {
             return CompletableFuture.completedFuture(false);
         }
         
+        String normalizedName = name.trim().toLowerCase();
         return databaseManager.executeTransactionAsync(connection -> {
-            String sql = "DELETE FROM whitelist WHERE name = ?";
-            
+            // 大小写不敏感, 与 isPlayerWhitelistedByName / getPlayerByName 一致
+            // (修复: 原 name=? 精确匹配, 存储名与输入名大小写不同时 check 查得到却删不掉)
+            String sql = "DELETE FROM whitelist WHERE LOWER(name) = ?";
+
             try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-                stmt.setString(1, name);
-                
+                stmt.setString(1, normalizedName);
+
                 int affected = stmt.executeUpdate();
                 if (affected > 0) {
-                    // 更新缓存 - 需要找到对应的UUID
-                    String uuidToRemove = null;
-                    for (Map.Entry<String, WhitelistEntry> entry : cache.entrySet()) {
-                        if (name.equals(entry.getValue().getName())) {
-                            uuidToRemove = entry.getKey();
-                            break;
-                        }
-                    }
-                    
-                    if (uuidToRemove != null) {
-                        WhitelistEntry removed = cache.remove(uuidToRemove);
-                        if (removed != null) {
-                            logger.info("从白名单移除玩家(按名称): {}", name);
-                        }
-                    } else {
-                        logger.info("从白名单移除玩家(按名称,未缓存): {}", name);
-                    }
+                    // 清缓存: 同一玩家在双索引下有 name:<小写> key 与 uuid key, 按名(忽略大小写)全部清掉
+                    cache.remove("name:" + normalizedName);
+                    cache.entrySet().removeIf(e -> e.getValue() != null && name.equalsIgnoreCase(e.getValue().getName()));
+                    logger.info("从白名单移除玩家(按名称): {}", name);
                     return true;
                 }
                 return false;
@@ -921,9 +911,10 @@ public class WhitelistManager {
                                 successfulUuids.add(entry.getUuid());
                                 successCount++;
                                 
-                                // 更新缓存
+                                // 更新缓存 (双索引: uuid + name:<小写>, 与 loadCache/addPlayer 一致)
                                 if (cacheLoaded) {
                                     cache.put(entry.getUuid(), entry);
+                                    cache.put("name:" + entry.getName().toLowerCase(), entry);
                                 }
                             } else {
                                 errors.add("玩家已存在: " + entry.getName() + " (" + entry.getUuid() + ")");
@@ -951,9 +942,10 @@ public class WhitelistManager {
                             if (affected > 0) {
                                 successfulUuids.add(entry.getUuid());
                                 successCount++;
-                                
-                                // 更新缓存
-                                cache.remove(entry.getUuid());
+
+                                // 清缓存: 按 uuid 清掉双索引下该玩家的 uuid key 与 name:<小写> key
+                                final String removedUuid = entry.getUuid();
+                                cache.entrySet().removeIf(e -> e.getValue() != null && removedUuid.equals(e.getValue().getUuid()));
                             } else {
                                 errors.add("玩家不存在: " + entry.getUuid());
                                 failedUuids.add(entry.getUuid());
