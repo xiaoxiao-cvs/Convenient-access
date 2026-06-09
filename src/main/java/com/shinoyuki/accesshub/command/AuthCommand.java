@@ -35,15 +35,17 @@ public final class AuthCommand {
     private AuthCommand() {}
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, AccessHubMod mod) {
-        // /register <password> <confirm>
+        // /register <password> <confirm> <code> (注册码绑定用户名, 离线模式防冒名抢注; 无码不可注册)
         dispatcher.register(Commands.literal("register")
                 .then(Commands.argument("password", StringArgumentType.word())
                         .then(Commands.argument("confirm", StringArgumentType.word())
-                                .executes(ctx -> doRegister(ctx, mod)))));
+                                .then(Commands.argument("code", StringArgumentType.word())
+                                        .executes(ctx -> doRegister(ctx, mod))))));
         dispatcher.register(Commands.literal("reg")
                 .then(Commands.argument("password", StringArgumentType.word())
                         .then(Commands.argument("confirm", StringArgumentType.word())
-                                .executes(ctx -> doRegister(ctx, mod)))));
+                                .then(Commands.argument("code", StringArgumentType.word())
+                                        .executes(ctx -> doRegister(ctx, mod))))));
 
         // /login <password>
         dispatcher.register(Commands.literal("login")
@@ -86,6 +88,7 @@ public final class AuthCommand {
         PlayerAuthService auth = mod.getPlayerAuthService();
         String password = StringArgumentType.getString(ctx, "password");
         String confirm = StringArgumentType.getString(ctx, "confirm");
+        String code = StringArgumentType.getString(ctx, "code");
         String name = player.getGameProfile().getName();
         MinecraftServer server = player.getServer();
         if (server == null) {
@@ -96,7 +99,7 @@ public final class AuthCommand {
             return 0;
         }
 
-        CompletableFuture.supplyAsync(() -> auth.register(name, password))
+        CompletableFuture.supplyAsync(() -> auth.register(name, password, code))
                 .thenAccept(result -> server.execute(() ->
                         player.sendSystemMessage(colored(result.getMessage(),
                                 result.isSuccess() ? ChatFormatting.GREEN : ChatFormatting.RED))))
@@ -114,6 +117,7 @@ public final class AuthCommand {
             return 0;
         }
         PlayerAuthService auth = mod.getPlayerAuthService();
+        AccessHubConfig config = mod.getConfig();
         if (auth.isAuthed(player.getUUID())) {
             player.sendSystemMessage(colored("你已登录", ChatFormatting.YELLOW));
             return 0;
@@ -122,6 +126,14 @@ public final class AuthCommand {
         String name = player.getGameProfile().getName();
         UUID uuid = player.getUUID();
         String ip = formatIp(player.connection.connection.getRemoteAddress());
+        // 下限钳制到 1: 防止管理员把 max-attempts 误填 0/负数导致首次密码错误即踢死合法玩家
+        final int max = Math.max(1, config.getPlayerAuthMaxAttempts());
+        // 入口同步短路: 已达上限直接踢, 不再派发 verify, 把并发在途 bcrypt 钳制在上限内 (主线程串行)
+        if (auth.getSessionFailureCount(uuid) >= max) {
+            player.connection.disconnect(Component.literal(
+                    "§c登录失败次数过多, 已断开连接, 请重新进入再试"));
+            return 0;
+        }
         MinecraftServer server = player.getServer();
         if (server == null) {
             return 0;
@@ -134,7 +146,18 @@ public final class AuthCommand {
                         auth.markAuthed(uuid);
                         player.setInvulnerable(false);
                         player.sendSystemMessage(colored(result.getMessage(), ChatFormatting.GREEN));
+                    } else if (result.isPasswordMismatch()) {
+                        // 仅密码错误才累计会话失败; 达上限即踢下线 (重连重置, 不持久锁号)
+                        int fails = auth.recordSessionFailure(uuid);
+                        if (fails >= max) {
+                            player.connection.disconnect(Component.literal(
+                                    "§c登录失败次数过多, 已断开连接, 请重新进入再试"));
+                        } else {
+                            player.sendSystemMessage(colored(
+                                    "密码错误, 还可尝试 " + (max - fails) + " 次", ChatFormatting.RED));
+                        }
                     } else {
+                        // 未注册 / 系统繁忙等非密码错误: 不计入踢出阈值
                         player.sendSystemMessage(colored(result.getMessage(), ChatFormatting.RED));
                     }
                 }))

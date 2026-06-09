@@ -18,6 +18,7 @@ import com.shinoyuki.accesshub.auth.AdminAuthService;
 import com.shinoyuki.accesshub.auth.LoginAttemptService;
 import com.shinoyuki.accesshub.auth.PlayerAuthDao;
 import com.shinoyuki.accesshub.auth.PlayerAuthService;
+import com.shinoyuki.accesshub.auth.PlayerRegistrationCodeDao;
 import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
 import com.shinoyuki.accesshub.backup.BackupManager;
 import com.shinoyuki.accesshub.command.AccessHubCommand;
@@ -116,10 +117,12 @@ public final class AccessHubMod {
 
         // 玩家离线认证 (游戏内强制登录, 与管理员 HTTP 认证相互独立). 数据库已就绪即可构建.
         PlayerAuthDao playerAuthDao = new PlayerAuthDao(databaseManager);
-        playerAuthService = new PlayerAuthService(playerAuthDao, config);
+        PlayerRegistrationCodeDao playerRegistrationCodeDao = new PlayerRegistrationCodeDao(databaseManager);
+        playerAuthService = new PlayerAuthService(playerAuthDao, playerRegistrationCodeDao, config);
 
-        // 6. API Controllers
-        WhitelistApiController whitelistController = new WhitelistApiController(whitelistManager, operationLogDao);
+        // 6. API Controllers (加白时由 playerAuthService 签发绑定注册码并回传)
+        WhitelistApiController whitelistController = new WhitelistApiController(
+                whitelistManager, operationLogDao, playerAuthService, config);
         UserApiController userController = new UserApiController(tokenManager, whitelistManager);
         OperationLogApiController operationLogController = new OperationLogApiController(operationLogDao);
         AdminAuthController adminAuthController = new AdminAuthController(adminAuthService);

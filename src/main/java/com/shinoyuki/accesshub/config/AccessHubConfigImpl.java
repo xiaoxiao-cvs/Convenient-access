@@ -112,9 +112,18 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("auth.timeout-seconds", 60);
         config.setComment("auth.timeout-seconds", " 进服后未在此秒数内完成认证则踢出");
         config.set("auth.max-attempts", 5);
-        config.setComment("auth.max-attempts", " 登录密码连续错误上限, 达到后锁定");
+        config.setComment("auth.max-attempts",
+                " 同一会话登录密码连续错误上限, 达到后踢下线 (重连即重置, 不持久锁号; 按 IP 锁因动态公网作废)");
         config.set("auth.lock-minutes", 10);
-        config.setComment("auth.lock-minutes", " 达到错误上限后的锁定时长 (分钟)");
+        config.setComment("auth.lock-minutes", " 已弃用: 失败改为会话内踢出, 此项不再生效, 仅保留以兼容旧配置");
+        config.set("auth.min-password-length", 8);
+        config.setComment("auth.min-password-length", " 注册 / 改密的密码最低位数");
+        config.set("auth.reject-weak-password", true);
+        config.setComment("auth.reject-weak-password",
+                " 拒绝弱密码 (纯数字 / 与用户名相同 / 常见弱口令)");
+        config.set("auth.code-expiry-minutes", 1440);
+        config.setComment("auth.code-expiry-minutes",
+                " 加白时生成的注册码有效期 (分钟), 默认 1440=24 小时; 一次性, 仅限绑定的用户名");
 
         config.set("backup.enabled", true);
         config.set("backup.schedule", "0:2:0");
@@ -227,6 +236,9 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     @Override public int     getPlayerAuthTimeoutSeconds(){ return config.getIntOrElse("auth.timeout-seconds", 60); }
     @Override public int     getPlayerAuthMaxAttempts()  { return config.getIntOrElse("auth.max-attempts", 5); }
     @Override public int     getPlayerAuthLockMinutes()  { return config.getIntOrElse("auth.lock-minutes", 10); }
+    @Override public int     getPlayerAuthMinPasswordLength()   { return config.getIntOrElse("auth.min-password-length", 8); }
+    @Override public boolean isPlayerAuthRejectWeakPassword()   { return config.getOrElse("auth.reject-weak-password", true); }
+    @Override public int     getPlayerAuthCodeExpiryMinutes()   { return config.getIntOrElse("auth.code-expiry-minutes", 1440); }
 
     @Override public boolean isBackupEnabled()       { return config.getOrElse("backup.enabled", true); }
     @Override public String  getBackupSchedule()     { return config.getOrElse("backup.schedule", "0:2:0"); }

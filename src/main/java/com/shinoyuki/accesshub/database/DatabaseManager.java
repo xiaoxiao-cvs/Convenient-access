@@ -45,7 +45,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 数据库版本
-    private static final int CURRENT_VERSION = 3; // v3: 玩家离线认证表 player_auth
+    private static final int CURRENT_VERSION = 4; // v4: 玩家注册码表 player_registration_codes
 
     public DatabaseManager(File dataFolder) {
         this.dataFolder = dataFolder;
@@ -171,6 +171,7 @@ public class DatabaseManager {
             "schema/admin_sessions.sql",
             "schema/auth_logs.sql",
             "schema/player_auth.sql",
+            "schema/player_registration_codes.sql",
             "schema/indexes.sql"
         };
         
@@ -315,24 +316,31 @@ public class DatabaseManager {
             }
         }
         
-        // 获取当前版本
-        String getVersion = "SELECT version FROM database_version LIMIT 1";
+        // 取最高版本号兜底: 历史遗留缺陷曾使 database_version 累积多行 (version 作主键,
+        // INSERT OR REPLACE 写新版本号不冲突而追加成行), 无序 LIMIT 1 会读到陈旧值导致每次启动
+        // 重复跑迁移。用 MAX 读真实最新版本规避; setDatabaseVersion 已改为单行不变量。
+        String getVersion = "SELECT MAX(version) AS version FROM database_version";
         try (Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery(getVersion)) {
-            
+
             if (rs.next()) {
-                return rs.getInt("version");
+                int v = rs.getInt("version");
+                return rs.wasNull() ? 0 : v;
             } else {
                 return 0;
             }
         }
     }
-    
+
     /**
-     * 设置数据库版本
+     * 设置数据库版本. 单行不变量: 先清空再写入, 避免 version 作主键时 INSERT OR REPLACE
+     * 因版本号不冲突而追加成多行 (历史遗留缺陷, 随 CURRENT_VERSION 提升被激活)。
      */
     private void setDatabaseVersion(Connection connection, int version) throws SQLException {
-        String sql = "INSERT OR REPLACE INTO database_version (version) VALUES (?)";
+        try (Statement del = connection.createStatement()) {
+            del.executeUpdate("DELETE FROM database_version");
+        }
+        String sql = "INSERT INTO database_version (version) VALUES (?)";
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setInt(1, version);
             stmt.executeUpdate();
@@ -347,6 +355,11 @@ public class DatabaseManager {
         
         for (int version = fromVersion; version < CURRENT_VERSION; version++) {
             String migrationScript = "migrations/migrate_" + version + "_to_" + (version + 1) + ".sql";
+            // 迁移必需脚本缺失 (打包遗漏/路径笔误) 时 fail-fast: executeScript 对缺失资源仅 warn 不抛,
+            // 若放任会静默跳步并照常推进版本号, 造成"版本最新但表未建"。createTables 的可选 schema 宽松行为不受影响。
+            if (getClass().getClassLoader().getResource(migrationScript) == null) {
+                throw new SQLException("迁移脚本缺失, 拒绝静默跳步: " + migrationScript);
+            }
             executeScript(connection, migrationScript);
             setDatabaseVersion(connection, version + 1);
             logger.info("数据库迁移完成: {} -> {}", version, version + 1);

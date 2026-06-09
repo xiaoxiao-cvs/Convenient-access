@@ -93,18 +93,15 @@ public final class PlayerAuthDao {
     }
 
     /**
-     * 登录失败: 失败计数 +1; 若达到 maxAttempts 则写入锁定截止时间.
-     * 单条 UPDATE 原子完成, 避免读改写竞态.
+     * 登录失败: 失败计数 +1 (仅作历史审计统计).
+     * 不再写持久锁定 (locked_until): 失败惩罚改由会话内存计数 + 达上限踢下线实现
+     * (见 PlayerAuthService 会话失败计数 / AuthCommand.doLogin), 重连即重置, 不持久锁号。
      */
-    public void recordLoginFailure(String username, int maxAttempts, int lockMinutes) throws SQLException {
-        String sql = "UPDATE player_auth SET fail_count = fail_count + 1, "
-                + "locked_until = CASE WHEN fail_count + 1 >= ? THEN ? ELSE locked_until END "
-                + "WHERE username = ?";
+    public void recordLoginFailure(String username) throws SQLException {
+        String sql = "UPDATE player_auth SET fail_count = fail_count + 1 WHERE username = ?";
         try (Connection conn = dbManager.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, maxAttempts);
-            ps.setString(2, LocalDateTime.now().plusMinutes(lockMinutes).toString());
-            ps.setString(3, normalize(username));
+            ps.setString(1, normalize(username));
             ps.executeUpdate();
         }
     }

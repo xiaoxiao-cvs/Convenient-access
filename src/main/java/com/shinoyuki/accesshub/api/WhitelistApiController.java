@@ -19,6 +19,8 @@ import com.google.gson.TypeAdapter;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import com.shinoyuki.accesshub.auth.AdminUser;
+import com.shinoyuki.accesshub.auth.PlayerAuthService;
+import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.operation.OperationLogDao;
 import com.shinoyuki.accesshub.utils.UuidUtils;
 import com.shinoyuki.accesshub.whitelist.BatchOperation;
@@ -37,11 +39,16 @@ public class WhitelistApiController {
     
     private final WhitelistManager whitelistManager;
     private final OperationLogDao operationLogDao;
+    private final PlayerAuthService playerAuthService; // 加白成功后签发绑定注册码; 可为 null (认证未启用)
+    private final AccessHubConfig config;
     private final Gson gson;
-    
-    public WhitelistApiController(WhitelistManager whitelistManager, OperationLogDao operationLogDao) {
+
+    public WhitelistApiController(WhitelistManager whitelistManager, OperationLogDao operationLogDao,
+                                  PlayerAuthService playerAuthService, AccessHubConfig config) {
         this.whitelistManager = whitelistManager;
         this.operationLogDao = operationLogDao;
+        this.playerAuthService = playerAuthService;
+        this.config = config;
         // 配置Gson以正确处理LocalDateTime
         this.gson = new GsonBuilder()
             .registerTypeAdapter(LocalDateTime.class, new TypeAdapter<LocalDateTime>() {
@@ -191,7 +198,16 @@ public class WhitelistApiController {
                         result.addProperty("added", true);
                         result.addProperty("uuid_pending", true); // 表示UUID将在玩家登录时补充
                         result.addProperty("message", "玩家已添加到白名单，UUID将在首次登录时自动补充");
-                        
+
+                        // 玩家认证启用时, 随回执签发绑定该用户名的一次性注册码 (前端展示给管理员转交玩家)
+                        if (config != null && config.isPlayerAuthEnabled() && playerAuthService != null) {
+                            String regCode = playerAuthService.generateRegistrationCode(name);
+                            if (regCode != null) {
+                                result.addProperty("registration_code", regCode);
+                                result.addProperty("code_expires_minutes", config.getPlayerAuthCodeExpiryMinutes());
+                            }
+                        }
+
                         sendJsonResponse(response, 201, ApiResponse.success(result, "玩家添加成功"));
                         logOperation("ADD", null, name, request, finalRequestBody, 201, executionTime);
                     } else {
@@ -549,7 +565,15 @@ public class WhitelistApiController {
                         responseData.addProperty("success_count", result.getSuccessCount());
                         responseData.addProperty("failure_count", result.getFailureCount());
                         responseData.addProperty("success_rate", result.getSuccessRate());
-                        
+
+                        // 批量加白不逐个签发注册码 (单条加白与游戏内 /accesshub auth gencode 才发);
+                        // 明示提示调用方, 杜绝静默缺口。补发: 游戏内 /accesshub auth gencode 批量为未注册白名单玩家发码。
+                        if (config != null && config.isPlayerAuthEnabled() && result.getSuccessCount() > 0) {
+                            responseData.addProperty("registration_codes_pending", true);
+                            responseData.addProperty("registration_codes_hint",
+                                    "批量加白未逐个签发注册码, 请在游戏内执行 /accesshub auth gencode 为未注册白名单玩家批量补发");
+                        }
+
                         if (!result.getErrors().isEmpty()) {
                             responseData.add("errors", gson.toJsonTree(result.getErrors()));
                         }

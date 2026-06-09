@@ -118,7 +118,9 @@ public final class PlayerAuthListener {
         if (registered) {
             player.sendSystemMessage(Component.literal("§e请使用 §a/login <密码> §e登录以解除限制"));
         } else {
-            player.sendSystemMessage(Component.literal("§e首次进入, 请使用 §a/register <密码> <确认密码> §e注册"));
+            player.sendSystemMessage(Component.literal(
+                    "§e首次进入, 请使用 §a/register <密码> <确认密码> <注册码> §e注册"));
+            player.sendSystemMessage(Component.literal("§7注册码需向管理员索取 (绑定你的用户名, 一次性)"));
         }
     }
 

@@ -60,8 +60,11 @@ public interface AccessHubConfig {
     // 玩家离线认证 (游戏内强制登录, 与上方管理员 HTTP API 登录限流相互独立)
     boolean isPlayerAuthEnabled();
     int getPlayerAuthTimeoutSeconds();
-    int getPlayerAuthMaxAttempts();
-    int getPlayerAuthLockMinutes();
+    int getPlayerAuthMaxAttempts();   // 同一会话登录密码连续错误上限, 达到即踢下线 (重连重置, 不持久锁号)
+    int getPlayerAuthLockMinutes();   // 已弃用: 改为会话内踢出后此项不再生效, 保留仅向后兼容旧配置
+    int getPlayerAuthMinPasswordLength();
+    boolean isPlayerAuthRejectWeakPassword();
+    int getPlayerAuthCodeExpiryMinutes();
 
     // 数据库自动备份
     boolean isBackupEnabled();

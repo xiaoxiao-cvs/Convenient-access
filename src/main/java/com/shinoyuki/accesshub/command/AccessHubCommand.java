@@ -70,7 +70,11 @@ public final class AccessHubCommand {
                                                 .executes(ctx -> doAuthReset(ctx, mod))))
                                 .then(Commands.literal("info")
                                         .then(Commands.argument("player", StringArgumentType.word())
-                                                .executes(ctx -> doAuthInfo(ctx, mod)))))
+                                                .executes(ctx -> doAuthInfo(ctx, mod))))
+                                .then(Commands.literal("gencode")
+                                        .then(Commands.argument("player", StringArgumentType.word())
+                                                .executes(ctx -> doAuthGenCode(ctx, mod)))
+                                        .executes(ctx -> doAuthGenCodeAll(ctx, mod))))
                         .then(Commands.literal("help").executes(AccessHubCommand::doHelp))
                         .executes(AccessHubCommand::doHelp)
         );
@@ -161,9 +165,28 @@ public final class AccessHubCommand {
         String operatorUuid = src.getEntity() instanceof ServerPlayer sp ? sp.getStringUUID() : "CONSOLE";
         // 被加玩家的 UUID 留空, 由其首次登录时 PlayerLoggedInEvent 补全
         wm.addPlayerByNameOnly(name, src.getTextName(), operatorUuid, WhitelistEntry.Source.ADMIN)
-                .thenAccept(ok -> reply(src, ok
-                        ? Component.literal("已添加 " + name + " 到白名单 (UUID 待首次登录补全)").withStyle(ChatFormatting.GREEN)
-                        : Component.literal("添加失败: " + name + " 可能已在白名单中").withStyle(ChatFormatting.RED)))
+                .thenAccept(ok -> {
+                    if (!ok) {
+                        reply(src, Component.literal("添加失败: " + name + " 可能已在白名单中").withStyle(ChatFormatting.RED));
+                        return;
+                    }
+                    // 加白成功后, 若玩家认证启用则随回执签发绑定该用户名的一次性注册码, 由 OP 转交玩家
+                    PlayerAuthService auth = mod.getPlayerAuthService();
+                    AccessHubConfig config = mod.getConfig();
+                    if (auth != null && config != null && config.isPlayerAuthEnabled()) {
+                        String regCode = auth.generateRegistrationCode(name);
+                        if (regCode != null) {
+                            reply(src, Component.literal("已添加 " + name + " 到白名单\n注册码: " + regCode
+                                    + " (一次性, 仅限该用户名; 转交该玩家用 /register <密码> <确认> " + regCode + ")")
+                                    .withStyle(ChatFormatting.GREEN));
+                            return;
+                        }
+                        reply(src, Component.literal("已添加 " + name + " 到白名单, 但注册码生成失败 (可用 /accesshub auth gencode "
+                                + name + " 重试)").withStyle(ChatFormatting.YELLOW));
+                        return;
+                    }
+                    reply(src, Component.literal("已添加 " + name + " 到白名单 (UUID 待首次登录补全)").withStyle(ChatFormatting.GREEN));
+                })
                 .exceptionally(t -> {
                     reply(src, Component.literal("添加异常: " + t.getMessage()).withStyle(ChatFormatting.RED));
                     return null;
@@ -304,12 +327,96 @@ public final class AccessHubCommand {
                     sb.append("\n§7注册时间: §f").append(r.getRegisteredAt());
                     sb.append("\n§7最后登录: §f").append(r.getLastLoginAt());
                     sb.append("\n§7最后登录 IP: §f").append(r.getLastLoginIp());
-                    sb.append("\n§7失败计数: §f").append(r.getFailCount());
-                    sb.append("\n§7锁定至: §f").append(r.getLockedUntil());
+                    sb.append("\n§7累计失败 (自上次成功登录): §f").append(r.getFailCount());
                     src.sendSuccess(() -> Component.literal(sb.toString()), false);
                 }))
                 .exceptionally(t -> {
                     reply(src, Component.literal("查询异常: " + t.getMessage()).withStyle(ChatFormatting.RED));
+                    return null;
+                });
+        return 1;
+    }
+
+    /** auth gencode &lt;player&gt;: 为指定玩家生成一次性、绑定其用户名、会过期的注册码, 由 OP 转交该玩家。 */
+    private static int doAuthGenCode(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
+        CommandSourceStack src = ctx.getSource();
+        PlayerAuthService auth = mod.getPlayerAuthService();
+        AccessHubConfig config = mod.getConfig();
+        if (auth == null || config == null || !config.isPlayerAuthEnabled()) {
+            src.sendFailure(Component.literal("玩家认证未启用或未就绪"));
+            return 0;
+        }
+        String name = StringArgumentType.getString(ctx, "player");
+        MinecraftServer server = src.getServer();
+        CompletableFuture.supplyAsync(() -> auth.generateRegistrationCode(name))
+                .thenAccept(code -> server.execute(() -> {
+                    if (code == null) {
+                        src.sendFailure(Component.literal("生成注册码失败 (系统繁忙), 请稍后重试"));
+                    } else {
+                        src.sendSuccess(() -> Component.literal("§a已为 " + name + " 生成注册码: §e" + code
+                                + " §7(一次性, 仅限该用户名, 有效期 " + config.getPlayerAuthCodeExpiryMinutes()
+                                + " 分钟)\n§7转交该玩家: §f/register <密码> <确认> " + code), false);
+                    }
+                }))
+                .exceptionally(t -> {
+                    reply(src, Component.literal("生成注册码异常: " + t.getMessage()).withStyle(ChatFormatting.RED));
+                    return null;
+                });
+        return 1;
+    }
+
+    /** auth gencode (无参): 为所有白名单中尚未注册的玩家批量生成注册码, 汇总回执给 OP。 */
+    private static int doAuthGenCodeAll(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
+        CommandSourceStack src = ctx.getSource();
+        PlayerAuthService auth = mod.getPlayerAuthService();
+        WhitelistManager wm = mod.getWhitelistManager();
+        AccessHubConfig config = mod.getConfig();
+        if (auth == null || wm == null || config == null || !config.isPlayerAuthEnabled()) {
+            src.sendFailure(Component.literal("玩家认证或白名单未就绪"));
+            return 0;
+        }
+        wm.getWhitelistPaginated(1, 1000, null, null, null, "added_at", "DESC", null, null)
+                .thenAccept(result -> {
+                    StringBuilder sb = new StringBuilder("§6=== 批量注册码 (未注册的白名单玩家) ===");
+                    int generated = 0, skipped = 0, failed = 0;
+                    for (WhitelistEntry entry : result.getItems()) {
+                        String pname = entry.getName();
+                        boolean registered;
+                        try {
+                            registered = auth.isRegistered(pname);
+                        } catch (RuntimeException e) {
+                            failed++; // fail-closed: 查询失败跳过该玩家, 绝不误发
+                            continue;
+                        }
+                        if (registered) {
+                            skipped++;
+                            continue;
+                        }
+                        String code = auth.generateRegistrationCode(pname);
+                        if (code == null) {
+                            failed++;
+                            continue;
+                        }
+                        generated++;
+                        sb.append("\n§f").append(pname).append(": §e").append(code);
+                    }
+                    sb.append("\n§7已生成 ").append(generated).append(" 个, 跳过已注册 ")
+                            .append(skipped).append(" 个");
+                    if (failed > 0) {
+                        sb.append(", §c失败 ").append(failed).append(" 个");
+                    }
+                    // 不静默截断: 白名单超过单页上限时明示
+                    if (result.getTotal() > result.getItems().size()) {
+                        sb.append("\n§c注意: 白名单共 ").append(result.getTotal()).append(" 人, 本次仅处理前 ")
+                                .append(result.getItems().size()).append(" 人, 请重复执行或分批处理");
+                    }
+                    if (generated == 0 && skipped == 0 && failed == 0) {
+                        sb.append("\n§7白名单为空");
+                    }
+                    reply(src, Component.literal(sb.toString()));
+                })
+                .exceptionally(t -> {
+                    reply(src, Component.literal("批量生成失败: " + t.getMessage()).withStyle(ChatFormatting.RED));
                     return null;
                 });
         return 1;
@@ -333,6 +440,8 @@ public final class AccessHubCommand {
         source.sendSuccess(() -> usage("/accesshub auth reset <玩家>", "清除密码强制重注册"), false);
         source.sendSuccess(() -> usage("/accesshub auth unregister <玩家>", "注销玩家认证记录"), false);
         source.sendSuccess(() -> usage("/accesshub auth info <玩家>", "查询玩家认证信息"), false);
+        source.sendSuccess(() -> usage("/accesshub auth gencode <玩家>", "生成绑定注册码 (转交该玩家)"), false);
+        source.sendSuccess(() -> usage("/accesshub auth gencode", "为未注册白名单玩家批量生成码"), false);
         source.sendSuccess(() -> usage("/accesshub help", "显示此帮助"), false);
         source.sendSuccess(() -> Component.literal("别名: /ca /ahub").withStyle(ChatFormatting.GRAY), false);
         return 1;
