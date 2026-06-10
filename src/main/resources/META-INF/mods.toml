@@ -9,6 +9,10 @@ version = "${mod_version}"
 displayName = "${mod_name}"
 authors = "${mod_authors}"
 description = '''${mod_description}'''
+# 客户端可不装本 mod: 白名单/密码登录全在服务端, 客户端不装只是失去免密 (DeviceAuth)。
+# IGNORE_ALL_VERSION 使 Forge 不把本 mod 当客户端必需、也不校验版本 -> 无 mod / 旧版客户端均可正常连入;
+# 装了本 mod 的客户端走可选通道协商免密 (协议版本由 AuthChannel 的谓词把关, 不兼容的免密协议仍会被通道检查挡下)。
+displayTest = "IGNORE_ALL_VERSION"
 
 [[dependencies.${mod_id}]]
     modId = "forge"
