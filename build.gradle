@@ -95,6 +95,16 @@ dependencies {
     compileOnly 'me.lucko:spark-api:0.1-SNAPSHOT'
 
     // Forge 1.20.1 自带 Gson 与 SLF4J，无需声明
+
+    // 测试 (仅测试期, 不打包)。被测类为纯 Java (认证/DB), 不依赖 MC 运行期。
+    // sqlite-jdbc / bcrypt 经 shade->implementation 传递到 testRuntime, 无需再声明。
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.mockito:mockito-core:5.11.0'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
 }
 
 tasks.named('processResources', ProcessResources).configure {
