@@ -11,6 +11,7 @@ import com.mojang.brigadier.ParseResults;
 import com.mojang.brigadier.context.ParsedCommandNode;
 import com.shinoyuki.accesshub.auth.PlayerAuthService;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
+import com.shinoyuki.accesshub.deviceauth.DeviceAuthServer;
 
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -65,15 +66,18 @@ public final class PlayerAuthListener {
 
     private final AccessHubConfig config;
     private final PlayerAuthService authService;
+    private final DeviceAuthServer deviceAuthServer;
 
     /** 登录点快照: 进服瞬间坐标 + 朝向, 用于每 tick 钉死未认证玩家。 */
     private final Map<UUID, LoginAnchor> anchors = new ConcurrentHashMap<>();
     /** 进服时间戳 (ms), 用于超时踢出判定。 */
     private final Map<UUID, Long> joinedAt = new ConcurrentHashMap<>();
 
-    public PlayerAuthListener(AccessHubConfig config, PlayerAuthService authService) {
+    public PlayerAuthListener(AccessHubConfig config, PlayerAuthService authService,
+                              DeviceAuthServer deviceAuthServer) {
         this.config = config;
         this.authService = authService;
+        this.deviceAuthServer = deviceAuthServer;
     }
 
     private boolean disabled() {
@@ -122,6 +126,11 @@ public final class PlayerAuthListener {
                     "§e首次进入, 请使用 §a/register <密码> <确认密码> <注册码> §e注册"));
             player.sendSystemMessage(Component.literal("§7注册码需向管理员索取 (绑定你的用户名, 一次性)"));
         }
+
+        // 免密 (best-effort): 有设备公钥 + 客户端装了本 mod 则自动挑战-验签解冻; 失败由上面的密码提示兜底
+        if (deviceAuthServer != null) {
+            deviceAuthServer.maybeChallengeOnJoin(player);
+        }
     }
 
     /** 退服: 清理会话与计时, 防止 UUID 残留已认证状态。 */
@@ -134,6 +143,9 @@ public final class PlayerAuthListener {
         authService.clearSession(uuid);
         anchors.remove(uuid);
         joinedAt.remove(uuid);
+        if (deviceAuthServer != null) {
+            deviceAuthServer.clear(uuid);
+        }
     }
 
     /**

@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class DatabaseVersionMigrationTest {
 
-    private static final int CURRENT_VERSION = 4;
+    private static final int CURRENT_VERSION = 5;
 
     @TempDir
     File tempDir;

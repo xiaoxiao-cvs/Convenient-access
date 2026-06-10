@@ -145,20 +145,9 @@ public final class PlayerAuthService {
             if (dao.findByUsername(username).isPresent()) {
                 return AuthResult.failure("该账号已注册, 请使用 /login 登录");
             }
-            Optional<CodeRecord> opt = codeDao.findByHash(sha256Base64(canonical));
-            if (opt.isEmpty()) {
-                return AuthResult.failure("注册码无效");
-            }
-            CodeRecord cr = opt.get();
-            if (cr.isUsed()) {
-                return AuthResult.failure("注册码已被使用, 请向管理员重新索取");
-            }
-            if (cr.getExpiresAt() == null || cr.getExpiresAt().isBefore(LocalDateTime.now())) {
-                return AuthResult.failure("注册码已过期, 请向管理员重新索取");
-            }
-            // 关键: 码绑定的用户名必须与本玩家名一致 -> 离线模式下别人的码注册不了你的名字
-            if (!normalize(cr.getBoundUsername()).equals(normalize(username))) {
-                return AuthResult.failure("该注册码不属于你的用户名");
+            CodeCheck cc = checkCode(username, canonical);
+            if (!cc.isValid()) {
+                return AuthResult.failure(cc.getMessage());
             }
             String hash = BCrypt.withDefaults().hashToString(BCRYPT_COST, password.toCharArray());
             dao.insert(username, hash);
@@ -166,11 +155,11 @@ public final class PlayerAuthService {
             // 失败不回滚、不回报"注册失败" (账号已建, 玩家可直接 /login), 仅告警人工核对。
             // 残留 is_used=0 的码无法被再利用: 它绑定该用户名, 而该名已被占用, register 查重会拦下。
             try {
-                codeDao.markUsed(cr.getId());
+                codeDao.markUsed(cc.getCodeId());
             } catch (SQLException e) {
-                logger.error("账号已建但注册码未能标记已用, 需人工核对: username={} codeId={}", username, cr.getId(), e);
+                logger.error("账号已建但注册码未能标记已用, 需人工核对: username={} codeId={}", username, cc.getCodeId(), e);
             }
-            logger.info("玩家完成注册: {} (注册码 id={})", username, cr.getId());
+            logger.info("玩家完成注册: {} (注册码 id={})", username, cc.getCodeId());
             return AuthResult.success("注册成功, 请使用 /login 登录");
         } catch (SQLException e) {
             // fail-closed: 入库/校验失败不视为注册成功
@@ -203,6 +192,88 @@ public final class PlayerAuthService {
         }
         // 展示为 XXXX-XXXX, 易读易口述; 校验时会去除分隔符并大写还原为 canonical
         return canonical.substring(0, 4) + "-" + canonical.substring(4);
+    }
+
+    /**
+     * 校验注册码 (入参已 canonicalize): 绑名 + 一次性 + 过期, 不消费。
+     * 供 register 与 /enroll 共用同一口径。必须在 try/SQLException fail-closed 上下文调用。
+     */
+    private CodeCheck checkCode(String username, String canonical) throws SQLException {
+        Optional<CodeRecord> opt = codeDao.findByHash(sha256Base64(canonical));
+        if (opt.isEmpty()) {
+            return CodeCheck.fail("注册码无效");
+        }
+        CodeRecord cr = opt.get();
+        if (cr.isUsed()) {
+            return CodeCheck.fail("注册码已被使用, 请向管理员重新索取");
+        }
+        if (cr.getExpiresAt() == null || cr.getExpiresAt().isBefore(LocalDateTime.now())) {
+            return CodeCheck.fail("注册码已过期, 请向管理员重新索取");
+        }
+        // 关键: 码绑定的用户名必须与本玩家名一致 -> 离线模式下别人的码用不到你的名字
+        if (!normalize(cr.getBoundUsername()).equals(normalize(username))) {
+            return CodeCheck.fail("该注册码不属于你的用户名");
+        }
+        return CodeCheck.ok(cr.getId());
+    }
+
+    /** 公开: 为 /enroll 校验注册码 (自带 canonicalize + fail-closed)。不消费。 */
+    public CodeCheck validateRegistrationCode(String username, String code) {
+        String canonical = canonicalizeCode(code);
+        if (canonical.isEmpty()) {
+            return CodeCheck.fail("请提供注册码");
+        }
+        try {
+            return checkCode(username, canonical);
+        } catch (SQLException e) {
+            logger.error("校验注册码数据库异常: {}", username, e);
+            return CodeCheck.fail("校验失败 (系统繁忙), 请稍后重试");
+        }
+    }
+
+    /**
+     * 为 /enroll &lt;码&gt; 校验: 账号必须已注册 (密码 = 换机/重装后的恢复锚, 不允许纯码登记跳过密码) + 码有效。
+     * 已登录会话登记走 isAuthed 直通, 不经此方法。
+     */
+    public CodeCheck validateEnrollWithCode(String username, String code) {
+        try {
+            if (dao.findByUsername(username).isEmpty()) {
+                return CodeCheck.fail("请先用注册码 /register 设置密码, 再 /enroll 登记设备 (密码是换机后的恢复手段)");
+            }
+        } catch (SQLException e) {
+            logger.error("enroll 查注册状态异常: {}", username, e);
+            return CodeCheck.fail("校验失败 (系统繁忙), 请稍后重试");
+        }
+        return validateRegistrationCode(username, code);
+    }
+
+    /** 消费注册码 (enroll 成功后). 失败仅告警, 不回滚 (码绑该名, 该名已绑设备, 残码无法复用)。 */
+    public void consumeRegistrationCode(long codeId) {
+        try {
+            codeDao.markUsed(codeId);
+        } catch (SQLException e) {
+            logger.error("消费注册码异常 id={}", codeId, e);
+        }
+    }
+
+    /** 注册码校验结果: 成功带 codeId 供调用方消费, 失败带可直接展示的消息。 */
+    public static final class CodeCheck {
+        private final boolean valid;
+        private final String message;
+        private final long codeId;
+
+        private CodeCheck(boolean valid, String message, long codeId) {
+            this.valid = valid;
+            this.message = message;
+            this.codeId = codeId;
+        }
+
+        static CodeCheck ok(long codeId) { return new CodeCheck(true, null, codeId); }
+        static CodeCheck fail(String message) { return new CodeCheck(false, message, -1L); }
+
+        public boolean isValid() { return valid; }
+        public String getMessage() { return message; }
+        public long getCodeId() { return codeId; }
     }
 
     /**

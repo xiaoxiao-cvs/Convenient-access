@@ -94,6 +94,12 @@ dependencies {
     // 未安装时 SparkIntegration 经 ModList.isLoaded 检测后降级为 JVM MXBean fallback。
     compileOnly 'me.lucko:spark-api:0.1-SNAPSHOT'
 
+    // DPAPI (免密设备私钥保护): MC 1.20.1 客户端运行期自带 JNA 5.12.1 (随 OSHI, jnidispatch
+    // 已在游戏启动时加载)。仅编译期解析 Crypt32Util 符号, 不打包, 不进 shade -> 不重蹈 sqlite
+    // 原生库/版本冲突的坑。DPAPI 调用全部收敛在仅客户端 dist 加载的类, 专用服务器永不触达。
+    compileOnly 'net.java.dev.jna:jna:5.12.1'
+    compileOnly 'net.java.dev.jna:jna-platform:5.12.1'
+
     // Forge 1.20.1 自带 Gson 与 SLF4J，无需声明
 
     // 测试 (仅测试期, 不打包)。被测类为纯 Java (认证/DB), 不依赖 MC 运行期。
@@ -101,6 +107,9 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testImplementation 'org.mockito:mockito-core:5.11.0'
+    // DPAPI 往返实测 (仅 Windows 跑, 非 Windows assumeTrue 跳过). 测试 JVM 非 Forge 环境,
+    // 需自带 JNA 才能加载 jnidispatch; 故这里显式 testImplementation (与 main 的 compileOnly 区分)。
+    testImplementation 'net.java.dev.jna:jna-platform:5.12.1'
 }
 
 tasks.named('test', Test).configure {

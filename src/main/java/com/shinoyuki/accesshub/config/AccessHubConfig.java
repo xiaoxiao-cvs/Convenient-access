@@ -66,6 +66,11 @@ public interface AccessHubConfig {
     boolean isPlayerAuthRejectWeakPassword();
     int getPlayerAuthCodeExpiryMinutes();
 
+    // 免密登录二期 (DeviceAuth)
+    boolean isDeviceAuthEnabled();
+    int getDeviceAuthChallengeTimeoutSeconds();
+    String getServerInstanceId();   // 签名域分隔用, 首启自动生成并持久化
+
     // 数据库自动备份
     boolean isBackupEnabled();
     String getBackupSchedule();      // "天:小时:分钟", 如 "0:2:0" = 每天 02:00

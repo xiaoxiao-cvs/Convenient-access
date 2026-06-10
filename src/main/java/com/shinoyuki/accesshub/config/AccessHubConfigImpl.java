@@ -124,6 +124,12 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("auth.code-expiry-minutes", 1440);
         config.setComment("auth.code-expiry-minutes",
                 " 加白时生成的注册码有效期 (分钟), 默认 1440=24 小时; 一次性, 仅限绑定的用户名");
+        config.set("auth.device-auth.enabled", true);
+        config.setComment("auth.device-auth.enabled",
+                " 免密登录二期: 装了本 mod 的客户端进服时服务端用设备公钥验签自动解冻; 没装/验签失败静默回退密码登录");
+        config.set("auth.device-auth.challenge-timeout-seconds", 5);
+        config.setComment("auth.device-auth.challenge-timeout-seconds",
+                " 免密挑战宽限秒数, 必须远小于 auth.timeout-seconds, 否则未装 mod 的玩家会在能 /login 前被踢");
 
         config.set("backup.enabled", true);
         config.set("backup.schedule", "0:2:0");
@@ -160,6 +166,12 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
             RANDOM.nextBytes(bytes);
             setJwtSecret(Base64.getEncoder().encodeToString(bytes));
             logger.info("自动生成 JWT 签名密钥 (256 bit, 已写入配置文件)");
+        }
+
+        if (getServerInstanceId().isEmpty()) {
+            // 免密签名域分隔用: 持久化, 避免每次重启使飞行中挑战失效 + 客户端按实例分文件失配
+            config.set("auth.device-auth.server-instance-id", generateRandomString(24, CHARSET_ALPHANUMERIC));
+            logger.info("自动生成 DeviceAuth 服务器实例标识 (持久化于配置)");
         }
     }
 
@@ -239,6 +251,9 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     @Override public int     getPlayerAuthMinPasswordLength()   { return config.getIntOrElse("auth.min-password-length", 8); }
     @Override public boolean isPlayerAuthRejectWeakPassword()   { return config.getOrElse("auth.reject-weak-password", true); }
     @Override public int     getPlayerAuthCodeExpiryMinutes()   { return config.getIntOrElse("auth.code-expiry-minutes", 1440); }
+    @Override public boolean isDeviceAuthEnabled()                  { return config.getOrElse("auth.device-auth.enabled", true); }
+    @Override public int     getDeviceAuthChallengeTimeoutSeconds(){ return config.getIntOrElse("auth.device-auth.challenge-timeout-seconds", 5); }
+    @Override public String  getServerInstanceId()                 { return config.getOrElse("auth.device-auth.server-instance-id", ""); }
 
     @Override public boolean isBackupEnabled()       { return config.getOrElse("backup.enabled", true); }
     @Override public String  getBackupSchedule()     { return config.getOrElse("backup.schedule", "0:2:0"); }

@@ -23,9 +23,13 @@ import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
 import com.shinoyuki.accesshub.backup.BackupManager;
 import com.shinoyuki.accesshub.command.AccessHubCommand;
 import com.shinoyuki.accesshub.command.AuthCommand;
+import com.shinoyuki.accesshub.command.EnrollCommand;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.config.AccessHubConfigImpl;
 import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.deviceauth.DeviceAuthServer;
+import com.shinoyuki.accesshub.deviceauth.DeviceKeyDao;
+import com.shinoyuki.accesshub.deviceauth.net.AuthChannel;
 import com.shinoyuki.accesshub.event.PlayerAuthListener;
 import com.shinoyuki.accesshub.event.PlayerLoginListener;
 import com.shinoyuki.accesshub.http.HttpServer;
@@ -38,6 +42,8 @@ import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLPaths;
 import org.slf4j.Logger;
 
@@ -55,13 +61,22 @@ public final class AccessHubMod {
     private WhitelistManager whitelistManager;
     private AdminAuthService adminAuthService;
     private PlayerAuthService playerAuthService;
+    private DeviceAuthServer deviceAuthServer;
     private HttpServer httpServer;
     private BackupManager backupManager;
     private SparkIntegration sparkIntegration;
 
     public AccessHubMod() {
         MinecraftForge.EVENT_BUS.register(this);
+        // MOD bus: 注册免密自定义网络通道 (须在 FMLCommonSetupEvent, 早于 ServerStarting)
+        FMLJavaModLoadingContext.get().getModEventBus().addListener(this::onCommonSetup);
         LOGGER.info("AccessHub v0.2.0 loading on Forge 1.20.1");
+    }
+
+    private void onCommonSetup(final FMLCommonSetupEvent event) {
+        // 通道注册写全局状态, 包进 enqueueWork 保证串行化
+        event.enqueueWork(AuthChannel::register);
+        LOGGER.info("DeviceAuth 网络通道已注册");
     }
 
     @SubscribeEvent
@@ -120,6 +135,11 @@ public final class AccessHubMod {
         PlayerRegistrationCodeDao playerRegistrationCodeDao = new PlayerRegistrationCodeDao(databaseManager);
         playerAuthService = new PlayerAuthService(playerAuthDao, playerRegistrationCodeDao, config);
 
+        // 免密验签 (DeviceAuth): 服务端只存公钥. 通道处理器经 AuthChannel.setServer 惰性引用本实例。
+        DeviceKeyDao deviceKeyDao = new DeviceKeyDao(databaseManager);
+        deviceAuthServer = new DeviceAuthServer(deviceKeyDao, playerAuthService, config);
+        AuthChannel.setServer(deviceAuthServer);
+
         // 6. API Controllers (加白时由 playerAuthService 签发绑定注册码并回传)
         WhitelistApiController whitelistController = new WhitelistApiController(
                 whitelistManager, operationLogDao, playerAuthService, config);
@@ -159,7 +179,7 @@ public final class AccessHubMod {
 
         // 8b. 玩家离线认证拦截器 (未认证全限制 + 冻结 + 超时踢出).
         // 注册到 EVENT_BUS 即生效; 内部各 @SubscribeEvent 均先判 auth.enabled 再处理, 禁用时零开销放行.
-        PlayerAuthListener authListener = new PlayerAuthListener(config, playerAuthService);
+        PlayerAuthListener authListener = new PlayerAuthListener(config, playerAuthService, deviceAuthServer);
         MinecraftForge.EVENT_BUS.register(authListener);
         LOGGER.info("玩家离线认证拦截器已注册到事件总线 (auth.enabled={})", config.isPlayerAuthEnabled());
 
@@ -193,7 +213,8 @@ public final class AccessHubMod {
         // 玩家自助认证命令 (不要求 OP). 无条件注册, 依赖在执行期经 getPlayerAuthService 惰性解析,
         // 因 RegisterCommandsEvent 在 initialize 之前的 bootstrap 即触发, 与 AccessHubCommand 同模式.
         AuthCommand.register(event.getDispatcher(), this);
-        LOGGER.info("AccessHub 命令已注册: /accesshub (alias: /ca /ahub), /register /login /changepassword (别名 /reg /l)");
+        EnrollCommand.register(event.getDispatcher(), this);
+        LOGGER.info("AccessHub 命令已注册: /accesshub (alias: /ca /ahub), /register /login /changepassword /enroll (别名 /reg /l)");
     }
 
     /**
@@ -222,5 +243,10 @@ public final class AccessHubMod {
      */
     public PlayerAuthService getPlayerAuthService() {
         return playerAuthService;
+    }
+
+    /** 暴露给命令层 (/enroll) 与网络通道使用. mod 启动失败时返回 null. */
+    public DeviceAuthServer getDeviceAuthServer() {
+        return deviceAuthServer;
     }
 }

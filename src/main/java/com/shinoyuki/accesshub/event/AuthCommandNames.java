@@ -14,7 +14,8 @@ public final class AuthCommandNames {
     public static final Set<String> ALLOWED = Set.of(
             "login", "l",
             "register", "reg",
-            "changepassword"
+            "changepassword",
+            "enroll"
     );
 
     private AuthCommandNames() {}

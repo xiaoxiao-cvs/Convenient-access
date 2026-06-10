@@ -45,7 +45,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 数据库版本
-    private static final int CURRENT_VERSION = 4; // v4: 玩家注册码表 player_registration_codes
+    private static final int CURRENT_VERSION = 5; // v5: 设备公钥表 device_keys (免密二期)
 
     public DatabaseManager(File dataFolder) {
         this.dataFolder = dataFolder;
@@ -172,6 +172,7 @@ public class DatabaseManager {
             "schema/auth_logs.sql",
             "schema/player_auth.sql",
             "schema/player_registration_codes.sql",
+            "schema/device_keys.sql",
             "schema/indexes.sql"
         };
         
