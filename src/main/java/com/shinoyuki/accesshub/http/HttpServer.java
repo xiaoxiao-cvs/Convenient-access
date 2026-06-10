@@ -56,6 +56,9 @@ public class HttpServer {
         server.addConnector(connector);
         server.start();
 
+        // 预加载关服期才用到的 Jetty 内部类, 规避 SecureJar 关闭阶段惰性加载失败 (崩关服)
+        preloadJettyShutdownClasses();
+
         logger.info("HTTP 服务器已启动: http://{}:{}",
                 "0.0.0.0".equals(host) ? "localhost" : host, port);
     }
@@ -65,8 +68,35 @@ public class HttpServer {
             try {
                 server.stop();
                 logger.info("HTTP 服务器已停止");
-            } catch (Exception e) {
-                logger.warn("停止 HTTP 服务器时发生错误", e);
+            } catch (Throwable t) {
+                // catch Throwable 而非 Exception: Forge SecureJar 下 server.stop() 可能抛
+                // NoClassDefFoundError (relocate 的 Jetty 关闭期内部类惰性加载失败, 见 ManagedSelector$CloseConnections),
+                // Error 不是 Exception, 不能让它逃逸崩掉关服流程。
+                logger.warn("停止 HTTP 服务器时发生错误 (不影响关服)", t);
+            }
+        }
+    }
+
+    /**
+     * 预加载 Jetty 仅在 stop() 才惰性首次加载的内部类.
+     * Forge SecureJar 的 ModuleClassLoader 在关服阶段对"运行期从未加载过"的类做惰性加载可能抛
+     * ClassNotFoundException (即便类就在 jar 内), 导致 stop() 抛 NoClassDefFoundError。趁启动期 (jar 健康)
+     * 先载入缓存, 关服时直接命中。relocate 后的真实包名从 Server 类动态推导, 不硬编码 relocate 路径。
+     */
+    private void preloadJettyShutdownClasses() {
+        ClassLoader cl = Server.class.getClassLoader();
+        String serverPkg = Server.class.getPackageName();                  // ...libs.jetty.server
+        String base = serverPkg.substring(0, serverPkg.lastIndexOf('.'));  // ...libs.jetty
+        String[] names = {
+                base + ".io.ManagedSelector$CloseConnections",
+                base + ".io.ManagedSelector$StopSelector",
+                base + ".io.ManagedSelector$DestroyEndPoint",
+        };
+        for (String name : names) {
+            try {
+                Class.forName(name, true, cl);
+            } catch (Throwable t) {
+                logger.debug("预加载 Jetty 关闭类失败 (不影响运行): {}", name);
             }
         }
     }

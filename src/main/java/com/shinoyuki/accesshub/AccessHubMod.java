@@ -191,18 +191,17 @@ public final class AccessHubMod {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         LOGGER.info("AccessHub 正在关闭...");
-        try {
-            if (backupManager != null) {
-                backupManager.shutdown();
-            }
-            if (httpServer != null) {
-                httpServer.stop();
-            }
-            if (databaseManager != null) {
-                databaseManager.shutdown();
-            }
-        } catch (Exception e) {
-            LOGGER.warn("AccessHub 关闭时发生异常", e);
+        // 每步独立 try/catch + catch Throwable: 关闭钩子绝不能崩掉关服流程, 且任一步失败不影响后续。
+        // 尤其 httpServer.stop() 在 Forge SecureJar 下可能抛 NoClassDefFoundError (relocate 的 Jetty 关闭期
+        // 类惰性加载失败), 那是 Error 不是 Exception, 旧的 catch(Exception) 抓不住会逃逸 -> 关服崩 + 服务器关不掉。
+        if (backupManager != null) {
+            try { backupManager.shutdown(); } catch (Throwable t) { LOGGER.warn("备份管理器关闭异常", t); }
+        }
+        if (httpServer != null) {
+            try { httpServer.stop(); } catch (Throwable t) { LOGGER.warn("HTTP 服务器关闭异常 (不影响关服)", t); }
+        }
+        if (databaseManager != null) {
+            try { databaseManager.shutdown(); } catch (Throwable t) { LOGGER.warn("数据库关闭异常", t); }
         }
         LOGGER.info("AccessHub 已关闭");
     }
