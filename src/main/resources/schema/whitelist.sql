@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS whitelist (
     source VARCHAR(10) NOT NULL DEFAULT 'PLAYER', -- 来源类型
     is_active BOOLEAN NOT NULL DEFAULT 1,         -- 是否激活
     uuid_pending BOOLEAN NOT NULL DEFAULT 0,      -- UUID是否待补充
+    qq VARCHAR(20),                               -- 联系 QQ (问卷审核加白时带入, 可空)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     

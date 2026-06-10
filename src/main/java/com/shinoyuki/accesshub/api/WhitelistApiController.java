@@ -184,7 +184,11 @@ public class WhitelistApiController {
             // 新逻辑：只使用玩家名添加到白名单，UUID留空等玩家登录时补充
             logger.info("添加玩家到白名单（仅用户名）: {}", name);
             
-            CompletableFuture<Boolean> addFuture = whitelistManager.addPlayerByNameOnly(name, addedByName, addedByUuid, source, addedAt);
+            // 可选联系 QQ (问卷审核加白时带入): 空串归一为 null
+            String rawQq = (json.has("qq") && !json.get("qq").isJsonNull()) ? json.get("qq").getAsString().trim() : "";
+            String qq = rawQq.isEmpty() ? null : rawQq;
+
+            CompletableFuture<Boolean> addFuture = whitelistManager.addPlayerByNameOnly(name, addedByName, addedByUuid, source, addedAt, qq);
             
             // 处理添加结果
             final String finalRequestBody = requestBody;

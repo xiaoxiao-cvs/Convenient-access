@@ -15,6 +15,7 @@ public class WhitelistEntry {
     private LocalDateTime addedAt;
     private String source;
     private boolean isActive;
+    private String qq;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     
@@ -100,9 +101,17 @@ public class WhitelistEntry {
     public boolean isActive() {
         return isActive;
     }
-    
+
     public void setActive(boolean active) {
         isActive = active;
+    }
+
+    public String getQq() {
+        return qq;
+    }
+
+    public void setQq(String qq) {
+        this.qq = qq;
     }
     
     public LocalDateTime getCreatedAt() {

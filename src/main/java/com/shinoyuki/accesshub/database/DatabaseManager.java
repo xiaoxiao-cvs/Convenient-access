@@ -45,7 +45,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 数据库版本
-    private static final int CURRENT_VERSION = 5; // v5: 设备公钥表 device_keys (免密二期)
+    private static final int CURRENT_VERSION = 6; // v6: 白名单增 qq 列 (问卷联系字段)
 
     public DatabaseManager(File dataFolder) {
         this.dataFolder = dataFolder;

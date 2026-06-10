@@ -66,6 +66,13 @@ public class WhitelistManager {
      * 添加玩家到白名单（只需用户名，支持自定义时间戳）
      */
     public CompletableFuture<Boolean> addPlayerByNameOnly(String name, String addedByName, String addedByUuid, WhitelistEntry.Source source, LocalDateTime addedAt) {
+        return addPlayerByNameOnly(name, addedByName, addedByUuid, source, addedAt, null);
+    }
+
+    /**
+     * 添加玩家到白名单（只需用户名 + 自定义时间戳 + 可选联系 QQ, 问卷审核加白时带入）
+     */
+    public CompletableFuture<Boolean> addPlayerByNameOnly(String name, String addedByName, String addedByUuid, WhitelistEntry.Source source, LocalDateTime addedAt, String qq) {
         // 参数验证
         if (!isValidPlayerName(name)) {
             logger.warn("无效的玩家名: {}", name);
@@ -81,13 +88,14 @@ public class WhitelistManager {
             
             // UUID留空，等玩家登录时补充
             WhitelistEntry entry = new WhitelistEntry(name, null, addedByName, addedByUuid, source.getValue(), addedAt);
-            
+            entry.setQq(qq);
+
             return databaseManager.executeTransactionAsync(connection -> {
                 String sql = """
-                    INSERT INTO whitelist (name, uuid, added_by_name, added_by_uuid, added_at, source, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO whitelist (name, uuid, added_by_name, added_by_uuid, added_at, source, is_active, qq)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """;
-                
+
                 try (PreparedStatement stmt = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
                     stmt.setString(1, entry.getName());
                     stmt.setString(2, entry.getUuid()); // null
@@ -96,6 +104,7 @@ public class WhitelistManager {
                     stmt.setTimestamp(5, Timestamp.valueOf(entry.getAddedAt()));
                     stmt.setString(6, entry.getSource());
                     stmt.setBoolean(7, entry.isActive());
+                    stmt.setString(8, entry.getQq());
                     
                     int affected = stmt.executeUpdate();
                     if (affected > 0) {
@@ -687,6 +696,7 @@ public class WhitelistManager {
         entry.setAddedAt(rs.getTimestamp("added_at").toLocalDateTime());
         entry.setSource(rs.getString("source"));
         entry.setActive(rs.getBoolean("is_active"));
+        entry.setQq(rs.getString("qq"));
         entry.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
         entry.setUpdatedAt(rs.getTimestamp("updated_at").toLocalDateTime());
         return entry;

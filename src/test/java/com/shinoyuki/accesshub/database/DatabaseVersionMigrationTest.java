@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class DatabaseVersionMigrationTest {
 
-    private static final int CURRENT_VERSION = 5;
+    private static final int CURRENT_VERSION = 6;
 
     @TempDir
     File tempDir;
@@ -58,6 +58,19 @@ class DatabaseVersionMigrationTest {
         }
     }
 
+    private boolean columnExists(DatabaseManager db, String table, String column) throws SQLException {
+        try (Connection c = db.getConnection();
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     @Test
     void freshDbInitializesToSingleRowCurrentVersion() throws Exception {
         DatabaseManager db = new DatabaseManager(tempDir);
@@ -65,6 +78,7 @@ class DatabaseVersionMigrationTest {
         assertEquals(1, rowCount(db), "version 表应恒为单行");
         assertEquals(CURRENT_VERSION, version(db), "新库应直接为最新版本");
         assertTrue(tableExists(db, "player_registration_codes"), "新库应建出注册码表");
+        assertTrue(columnExists(db, "whitelist", "qq"), "新库 whitelist 应含 qq 列");
         db.shutdown();
     }
 
@@ -74,6 +88,8 @@ class DatabaseVersionMigrationTest {
         File dbFile = new File(tempDir, "whitelist.db");
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbFile.getAbsolutePath());
              Statement s = c.createStatement()) {
+            // 真实 v3 库自 v1 起就有 whitelist 表; migrate_5_to_6 是 ALTER, 需该表存在
+            s.execute("CREATE TABLE whitelist (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
             s.execute("CREATE TABLE database_version (version INTEGER PRIMARY KEY)");
             s.execute("INSERT INTO database_version (version) VALUES (1)");
             s.execute("INSERT INTO database_version (version) VALUES (2)");
@@ -86,6 +102,7 @@ class DatabaseVersionMigrationTest {
         assertEquals(1, rowCount(db), "脏的多行 version 表应被折叠为单行");
         assertEquals(CURRENT_VERSION, version(db), "应升级到最新版本");
         assertTrue(tableExists(db, "player_registration_codes"), "3->4 迁移应建出注册码表");
+        assertTrue(columnExists(db, "whitelist", "qq"), "5->6 迁移应给 whitelist 加 qq 列");
         db.shutdown();
     }
 }
