@@ -15,6 +15,7 @@ import com.shinoyuki.accesshub.auth.PlayerAuthService;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.deviceauth.net.AuthChannel;
 import com.shinoyuki.accesshub.deviceauth.net.S2CChallenge;
+import com.shinoyuki.accesshub.event.PlayerAuthListener;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -111,7 +112,7 @@ public final class DeviceAuthServer {
                     }
                     if (outcome.success) {
                         authService.markAuthed(uuid);
-                        online.setInvulnerable(false);
+                        PlayerAuthListener.liftRestrictions(online); // 立即解除失明/缓慢/无敌, 不留残留
                     }
                     online.sendSystemMessage(Component.literal((outcome.success ? "§a" : "§c") + outcome.message));
                 }))

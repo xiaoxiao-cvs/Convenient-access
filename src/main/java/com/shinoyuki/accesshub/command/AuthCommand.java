@@ -11,6 +11,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.shinoyuki.accesshub.AccessHubMod;
 import com.shinoyuki.accesshub.auth.PlayerAuthService;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
+import com.shinoyuki.accesshub.event.PlayerAuthListener;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
@@ -142,9 +143,9 @@ public final class AuthCommand {
         CompletableFuture.supplyAsync(() -> auth.verify(name, password, ip))
                 .thenAccept(result -> server.execute(() -> {
                     if (result.isSuccess()) {
-                        // 标记已认证必须在主线程, 解除限制: tick 冻结自然停止, 撤销无敌
+                        // 标记已认证必须在主线程; 立即解除限制 (失明/缓慢/无敌), 不等效果自然过期残留
                         auth.markAuthed(uuid);
-                        player.setInvulnerable(false);
+                        PlayerAuthListener.liftRestrictions(player);
                         player.sendSystemMessage(colored(result.getMessage(), ChatFormatting.GREEN));
                     } else if (result.isPasswordMismatch()) {
                         // 仅密码错误才累计会话失败; 达上限即踢下线 (重连重置, 不持久锁号)

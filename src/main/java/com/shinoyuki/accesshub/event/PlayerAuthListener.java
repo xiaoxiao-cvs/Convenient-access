@@ -89,6 +89,17 @@ public final class PlayerAuthListener {
         return entity instanceof ServerPlayer sp && !authService.isAuthed(sp.getUUID());
     }
 
+    /**
+     * 认证成功后立即解除未认证期施加的限制 (失明 / 缓慢 / 无敌), 避免等效果自然过期残留约 5 秒。
+     * 由密码登录 (AuthCommand.doLogin) 与免密 (DeviceAuthServer) 在 markAuthed 后于主线程调用;
+     * markAuthed 已置位, onPlayerTick 下一 tick 因 isAuthed 短路不再续期, 故移除一次即可。
+     */
+    public static void liftRestrictions(ServerPlayer player) {
+        player.removeEffect(MobEffects.BLINDNESS);
+        player.removeEffect(MobEffects.MOVEMENT_SLOWDOWN);
+        player.setInvulnerable(false);
+    }
+
     // ==================== 进服 / 退服 / 超时 ====================
 
     /**
