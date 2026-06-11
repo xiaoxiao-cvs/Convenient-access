@@ -45,23 +45,31 @@ public final class DeviceAuthServer {
         this.config = config;
     }
 
-    /** 进服: 有公钥 + 客户端在场 -> 发 AUTH 挑战 (best-effort). 失败由既有密码提示兜底。 */
+    /** 进服: 有公钥 + 客户端在场 -> 发 AUTH 挑战 (best-effort). 失败由既有密码提示兜底。
+     *  每个跳过分支落 INFO: 免密是 best-effort 静默回退, 不记日志则线上"为何没免密"无从排查。 */
     public void maybeChallengeOnJoin(ServerPlayer player) {
-        if (!config.isDeviceAuthEnabled() || authService.isAuthed(player.getUUID())) {
+        String username = player.getGameProfile().getName();
+        if (!config.isDeviceAuthEnabled()) {
+            logger.info("[免密] {} 跳过: device-auth.enabled=false (免密总开关关闭)", username);
             return;
         }
-        String username = player.getGameProfile().getName();
+        if (authService.isAuthed(player.getUUID())) {
+            return; // 已认证 (如密码已登录), 无需挑战, 属正常不记
+        }
         try {
             if (deviceKeyDao.findPublicKey(username).isEmpty()) {
+                logger.info("[免密] {} 跳过: 未登记设备, 走密码登录 (需先 /enroll)", username);
                 return; // 没登记设备 -> 走密码
             }
         } catch (Exception e) {
-            logger.warn("查询设备公钥失败: {}", username, e);
+            logger.warn("[免密] {} 查询设备公钥失败, 回退密码", username, e);
             return; // fail-closed: 查不到就不挑战
         }
         if (!AuthChannel.clientHasMod(player)) {
+            logger.info("[免密] {} 跳过: 客户端未注册免密通道 (没装本 mod, 或 Connector 下通道协商尚未就绪)", username);
             return; // 没装本 mod -> 走密码
         }
+        logger.info("[免密] {} 已发 AUTH 挑战 (serverId={})", username, config.getServerInstanceId());
         sendChallenge(player, DeviceCrypto.PHASE_AUTH, -1L);
     }
 
@@ -83,14 +91,18 @@ public final class DeviceAuthServer {
 
     /** 收客户端响应 (服务器主线程, sender 为权威身份)。 */
     public void handleResponse(ServerPlayer sender, String phase, byte[] publicKey, byte[] signature) {
+        final String username = sender.getGameProfile().getName();
         Pending p = pending.remove(sender.getUUID()); // 一次性消费, 防重放
         if (p == null || !p.phase.equals(phase)) {
+            logger.info("[免密] {} 响应被丢弃: 无匹配挑战 (收到 phase={}, 待应答={})",
+                    username, phase, p == null ? "无" : p.phase);
             return; // 无挑战 / 阶段不符
         }
         if (System.currentTimeMillis() - p.signedAt > config.getDeviceAuthChallengeTimeoutSeconds() * 1000L) {
+            logger.info("[免密] {} 响应被丢弃: 挑战超时 (宽限 {}s, 网络往返过慢)",
+                    username, config.getDeviceAuthChallengeTimeoutSeconds());
             return; // 超时 nonce -> 拒绝
         }
-        final String username = sender.getGameProfile().getName();
         final String serverId = config.getServerInstanceId();
         final MinecraftServer server = sender.getServer();
         if (server == null) {
@@ -144,6 +156,8 @@ public final class DeviceAuthServer {
             return new Outcome(false, "免密公钥损坏, 请 /login 后重新 /enroll");
         }
         if (!DeviceCrypto.verify(publicKey, payload, signature)) {
+            // 验签不过最可能: 客户端密钥与服务端登记的公钥不配 (换机 / 重装 / serverId 变化后客户端用了新密钥文件)
+            logger.info("[免密] {} 验签失败 (serverId={}), 回退密码登录", username, serverId);
             return new Outcome(false, "免密验签失败, 请 /login");
         }
         try {
