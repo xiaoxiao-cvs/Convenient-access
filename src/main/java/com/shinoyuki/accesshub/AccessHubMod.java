@@ -81,9 +81,19 @@ public final class AccessHubMod {
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
+        net.minecraft.server.MinecraftServer server = event.getServer();
+        // 专用服务器运维工具: 白名单 / HTTP API / 离线认证 全是面向 dedicated server 的服务端功能。
+        // 内置服务器 (单人存档 / 客户端 "对局域网开放") 同样触发 ServerStartingEvent, 若不区分会把房主当作
+        // 未在白名单的访问者进服即踢 (whitelist.enabled 默认开), 或在 auth.enabled 默认开下把房主失明/缓慢/钉死
+        // 在出生点却无注册码可用 -> 单人进不去。故内置服务器整体跳过服务端初始化, 使装了本 mod 的客户端单人存档
+        // 完全透明可玩 (客户端侧只保留 DeviceAuth 免密通道, 仅在连入专用服务器时才生效)。
+        if (!server.isDedicatedServer()) {
+            LOGGER.info("AccessHub 运行于内置服务器 (单人/局域网), 跳过服务端初始化: 白名单/HTTP/认证均不启用, 单人存档不受影响");
+            return;
+        }
         try {
             // 传入 MinecraftServer 供 PlayerDataHandler 在主线程采集玩家数据
-            initialize(event.getServer());
+            initialize(server);
             LOGGER.info("AccessHub 服务端启动完成");
         } catch (Exception e) {
             // 不向 Forge 抛出: mod 启动失败应该只让本 mod 业务不可用, 而不是把整个服务器拖死
