@@ -114,6 +114,23 @@ class PlayerRegistrationCodeFlowTest {
     }
 
     @Test
+    void regeneratingCodeInvalidatesPreviousUnusedCode() {
+        // 自助领码每次重签都作废该名旧的未用码 (invalidateUnusedFor 物理删除),
+        // 保证同名同时只有一个有效码。这是"审核加白时生成的码被丢弃、玩家领码时重签"
+        // 不留下双有效码的依据: 旧码必须失效。
+        String first = auth.generateRegistrationCode("Heidi");
+        String second = auth.generateRegistrationCode("Heidi");
+        assertNotNull(second, "重签应返回新明文码");
+
+        AuthResult withOld = auth.register("Heidi", "Str0ngPass", first);
+        assertFalse(withOld.isSuccess(), "重签后旧的未用码应失效");
+        assertTrue(withOld.getMessage().contains("无效"), "旧码被删除后应提示注册码无效: " + withOld.getMessage());
+
+        AuthResult withNew = auth.register("Heidi", "Str0ngPass", second);
+        assertTrue(withNew.isSuccess(), "最新签发的码应能注册: " + withNew.getMessage());
+    }
+
+    @Test
     void caseInsensitiveNameBindingMatches() {
         // 码按小写规范化绑定; 玩家名大小写不同也应匹配 (与白名单/认证按名口径一致)
         String code = auth.generateRegistrationCode("MixedCase");

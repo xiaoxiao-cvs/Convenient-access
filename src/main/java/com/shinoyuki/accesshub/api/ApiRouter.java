@@ -248,6 +248,9 @@ public class ApiRouter extends HttpServlet {
                      whitelistController.handleAddPlayer(request, response);
                  } else if (path.equals("/api/v1/whitelist/batch")) {
                      whitelistController.handleBatchOperation(request, response);
+                 } else if (path.equals("/api/v1/whitelist/regcode")) {
+                     // 仅发码, 不加白; 非公开 -> 落在此鉴权分支内, 需 X-API-Key / 管理员 JWT
+                     whitelistController.handleIssueRegistrationCode(request, response);
                  } else if (path.equals("/api/v1/whitelist/sync")) {
                      whitelistController.handleTriggerSync(request, response);
                  } else {

@@ -233,7 +233,66 @@ public class WhitelistApiController {
             logOperation("ADD", null, null, request, requestBody, 500, System.currentTimeMillis() - startTime);
         }
     }
-    
+
+    /**
+     * 处理POST /api/v1/whitelist/regcode - 为指定玩家名签发一次性注册码 (仅发码, 不加白)。
+     *
+     * 与 handleAddPlayer "加白即发码" 解耦: 玩家在问卷站审核通过后早已被加白, 此时再调
+     * /v1/whitelist 会因已在白名单撞 409 而拿不到码 (见 handleAddPlayer 409 分支)。故单开此端点
+     * 直接调 generateRegistrationCode (内部作废该名旧未用码 + 插入新码), 与白名单状态无关,
+     * 供问卷后端在玩家自助领码时以服务端身份调用。非公开端点: 经 ApiRouter 鉴权 (X-API-Key /
+     * 管理员 JWT), 不对公网裸奔。
+     */
+    public void handleIssueRegistrationCode(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        long startTime = System.currentTimeMillis();
+        String requestBody = null;
+        try {
+            requestBody = readRequestBody(request);
+            JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
+
+            if (!json.has("name")) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: name"));
+                logOperation("GENCODE", null, null, request, requestBody, 400, System.currentTimeMillis() - startTime);
+                return;
+            }
+
+            String name = json.get("name").getAsString();
+            if (!isValidPlayerName(name)) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名称格式无效"));
+                logOperation("GENCODE", null, name, request, requestBody, 400, System.currentTimeMillis() - startTime);
+                return;
+            }
+
+            // 认证未启用时无码可发: 明确 409, 杜绝静默返回空码让调用方误判为成功
+            if (config == null || !config.isPlayerAuthEnabled() || playerAuthService == null) {
+                sendJsonResponse(response, 409, ApiResponse.error("玩家认证未启用, 无法签发注册码"));
+                logOperation("GENCODE", null, name, request, requestBody, 409, System.currentTimeMillis() - startTime);
+                return;
+            }
+
+            String regCode = playerAuthService.generateRegistrationCode(name);
+            if (regCode == null) {
+                // generateRegistrationCode 内部 DB 异常已 fail-closed 返回 null
+                sendJsonResponse(response, 500, ApiResponse.error("生成注册码失败"));
+                logOperation("GENCODE", null, name, request, requestBody, 500, System.currentTimeMillis() - startTime);
+                return;
+            }
+
+            JsonObject result = new JsonObject();
+            result.addProperty("name", name);
+            result.addProperty("registration_code", regCode);
+            result.addProperty("code_expires_minutes", config.getPlayerAuthCodeExpiryMinutes());
+            sendJsonResponse(response, 200, ApiResponse.success(result, "注册码已生成"));
+            // 明文码绝不入日志: logOperation 仅写请求体 ({name}), 响应里的码不落库
+            logOperation("GENCODE", null, name, request, requestBody, 200, System.currentTimeMillis() - startTime);
+
+        } catch (Exception e) {
+            logger.error("处理签发注册码请求失败", e);
+            sendJsonResponse(response, 500, ApiResponse.error("服务器内部错误"));
+            logOperation("GENCODE", null, null, request, requestBody, 500, System.currentTimeMillis() - startTime);
+        }
+    }
+
     /**
      * 处理DELETE /api/v1/whitelist/{uuid} - 从白名单移除玩家
      */

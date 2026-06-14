@@ -122,6 +122,7 @@ auth:
 | `/api/v1/whitelist` | POST | 添加白名单条目 | API Token |
 | `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | API Token |
 | `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | API Token |
+| `/api/v1/whitelist/regcode` | POST | 为指定玩家名签发一次性注册码（仅发码，不加白） | API Token |
 | `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | API Token |
 | `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Token |
 | `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | API Token |
@@ -447,6 +448,37 @@ X-Admin-Password: your-admin-password
   "timestamp": 1640995200000
 }
 ```
+
+#### `POST /api/v1/whitelist/regcode`
+
+为指定玩家名签发一次性注册码，仅发码、不改动白名单。与 `POST /api/v1/whitelist`（加白即发码）解耦：当玩家已在白名单（如问卷审核时已加白）时再调加白会撞 409 拿不到码，此端点直接重签注册码，与白名单状态无关。内部会作废该玩家名名下旧的未用码，保证同名同时只有一个有效码；仅返回明文码一次，库内只存其 SHA-256 哈希。
+
+主要供问卷后端在玩家凭 hash 自助领码时以服务端身份调用。需玩家认证（`player-auth`）启用，否则返回 409。
+
+**请求体：**
+```json
+{
+  "name": "PlayerName"
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "message": "注册码已生成",
+  "data": {
+    "name": "PlayerName",
+    "registration_code": "ABCD-2345",
+    "code_expires_minutes": 1440
+  },
+  "timestamp": 1640995200000
+}
+```
+
+**说明：**
+- 注册码绑定该玩家名、一次性、`code_expires_minutes` 分钟后过期，玩家游戏内 `/register <密码> <确认> <注册码>` 使用。
+- 玩家认证未启用时返回 409 `玩家认证未启用, 无法签发注册码`。
 
 #### `GET /api/v1/whitelist/stats`
 
