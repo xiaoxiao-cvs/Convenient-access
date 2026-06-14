@@ -12,8 +12,11 @@ import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 /**
- * DeviceAuth 的 PLAY 阶段自定义通道. 可选通道: 谓词放行 ACCEPTVANILLA, 使没装本 mod 的
- * 客户端 / vanilla / Connector 纯 Fabric 客户端不会被 "Mismatched Channel List" 踢。
+ * DeviceAuth 的 PLAY 阶段自定义通道. 可选通道: 谓词须同时放行 ABSENT 与 ACCEPTVANILLA,
+ * 才能让 "装了 Forge 但没装本 mod" 的客户端 (握手时该通道上报 ABSENT) 与纯 vanilla 客户端
+ * (上报 ACCEPTVANILLA) 都不被 "Mismatched Channel List" 踢。仅放行 ACCEPTVANILLA 会漏掉
+ * ABSENT 这条路径 -> Forge 无本 mod 客户端仍被拒。用 acceptMissingOr 一次覆盖三种取值
+ * (协议版本 / ABSENT / ACCEPTVANILLA)。
  *
  * 通道对象在类加载期 (static) 构造; 消息注册 (messageBuilder.add) 须在 FMLCommonSetupEvent
  * 调 register()。服务端验签器引用在装配期 setServer 设入, 包处理器惰性读取。
@@ -25,8 +28,8 @@ public final class AuthChannel {
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(AccessHubMod.MOD_ID, "deviceauth"),
             () -> PROTOCOL_VERSION,
-            v -> NetworkRegistry.ACCEPTVANILLA.equals(v) || PROTOCOL_VERSION.equals(v),
-            v -> NetworkRegistry.ACCEPTVANILLA.equals(v) || PROTOCOL_VERSION.equals(v));
+            NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION),
+            NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION));
 
     private static volatile DeviceAuthServer server;
     private static int packetId = 0;
