@@ -17,7 +17,6 @@ import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
 import net.minecraft.network.Connection;
-import net.minecraft.network.PacketSendListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket;
 import net.minecraft.server.MinecraftServer;
@@ -290,17 +289,26 @@ public final class PlayerLoginListener {
     }
 
     /**
-     * login (协商) 阶段带文案安全断连。
+     * login (协商) 阶段带文案安全断连, 严格镜像原版 ServerLoginPacketListenerImpl#disconnect。
      *
-     * 修复"踢出文案变成连接中断"的 bug: 1.20.1 的 {@link Connection#disconnect(Component)} 只关闭 TCP
-     * 通道并把原因存到本地字段, 不向客户端发送任何断开包 — 客户端遂只能显示通用的"连接中断"而非踢出文案。
-     * 必须先发 {@link ClientboundLoginDisconnectPacket} 把文案送达客户端, 待其发出后再关通道,
-     * 与原版 ServerLoginPacketListenerImpl#disconnect 行为一致。用 PacketSendListener.thenRun 确保发包
-     * 完成后才关闭 (本方法在异步线程调用, 直接 send 后立即 disconnect 可能在包刷出前就关掉通道)。
+     * 背景: 1.20.1 的 {@link Connection#disconnect(Component)} 只 channel.close() 不发断开包, 客户端只
+     * 会看到通用"连接中断"。故须先发 {@link ClientboundLoginDisconnectPacket} 把文案送达, 再关通道。
+     *
+     * 关键(踩坑): send 与 disconnect 必须在本方法所在的【异步线程】(performWhitelistCheck 跑在
+     * ForkJoinPool, 非 netty 事件循环)上【同步顺序】调用 — 绝不能把 disconnect 放进 PacketSendListener
+     * 回调。因为该回调在 netty 事件循环线程触发, 而 Connection.disconnect 内部是
+     * channel.close().awaitUninterruptibly() (阻塞等待自身 close future); 在事件循环线程上这样阻塞会触发
+     * netty BlockingOperationException, 通道被异常关闭, 客户端反而收到 "连接重置/Connection reset"。
+     * 同线程顺序调用则: send 把写任务排进事件循环, disconnect 的 close 任务紧随其后, 事件循环按序先刷包再关闭,
+     * awaitUninterruptibly 阻塞的只是本异步线程(无害)。
      */
     private void disconnectDuringLogin(Connection connection, Component reason) {
-        connection.send(new ClientboundLoginDisconnectPacket(reason),
-                PacketSendListener.thenRun(() -> connection.disconnect(reason)));
+        try {
+            connection.send(new ClientboundLoginDisconnectPacket(reason));
+            connection.disconnect(reason);
+        } catch (Exception e) {
+            logger.error("登录阶段带文案断连失败", e);
+        }
     }
 
     private String formatKickMessage(String playerName) {
