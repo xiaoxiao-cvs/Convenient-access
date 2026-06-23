@@ -50,6 +50,7 @@ public interface AccessHubConfig {
     boolean isWhitelistEnabled();
     boolean isWhitelistStrictMode();
     String getWhitelistKickMessage();
+    String getWhitelistDisabledMessage();
     String getContactInfo();
     int getTokenExpiryHours();
     boolean isAutoCleanupTokens();

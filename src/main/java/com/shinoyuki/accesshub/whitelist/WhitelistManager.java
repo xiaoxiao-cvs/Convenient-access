@@ -322,35 +322,47 @@ public class WhitelistManager {
     }
 
     /**
-     * 检查玩家是否在白名单中（离线模式 - 同时检查用户名和UUID）
+     * 检查玩家是否在白名单中（离线模式 - 同时检查用户名和UUID）。
+     * 委托三态判定 {@link #checkAccess}, 仅 ALLOWED 视为放行, 保持单一查询逻辑。
      */
     public CompletableFuture<Boolean> isPlayerWhitelistedOffline(String playerName, String uuid) {
+        return checkAccess(playerName, uuid).thenApply(decision -> decision == AccessDecision.ALLOWED);
+    }
+
+    /**
+     * 进服访问三态判定: 区分 ALLOWED / DISABLED (在白名单但被管理员手动禁用) / NOT_WHITELISTED。
+     *
+     * 缓存只装 is_active=1 的条目 (见 loadCache): 命中即 ALLOWED, 走内存快路径, 避免 PreLogin
+     * 阶段去抢 8 线程的异步池 (幽灵踢人的主要诱因)。缓存未命中再查库, 此处不带 is_active 过滤,
+     * 以便把"被禁用"从"不在名单"中分辨出来; 命中 active 行才回填缓存。
+     */
+    public CompletableFuture<AccessDecision> checkAccess(String playerName, String uuid) {
         if (playerName == null || playerName.trim().isEmpty()) {
-            return CompletableFuture.completedFuture(false);
+            return CompletableFuture.completedFuture(AccessDecision.NOT_WHITELISTED);
         }
 
         if (cacheLoaded) {
-            // 先按 UUID 查缓存
+            // 先按 UUID 查缓存 (缓存仅含 active 条目, 命中即放行)
             if (isValidUuid(uuid)) {
                 WhitelistEntry entry = cache.get(uuid);
                 if (entry != null && entry.isActive()) {
-                    return CompletableFuture.completedFuture(true);
+                    return CompletableFuture.completedFuture(AccessDecision.ALLOWED);
                 }
             }
-            // 再按名字查缓存 — 覆盖 UUID 待补充的条目，以及通过 name 索引命中的路径
-            // 命中缓存可避免 PreLogin 阶段去抢 8 线程的异步池（这是幽灵踢人的主要诱因）
+            // 再按名字查缓存 — 覆盖 UUID 待补充的条目, 以及通过 name 索引命中的路径
             WhitelistEntry byName = cache.get("name:" + playerName.trim().toLowerCase());
             if (byName != null && byName.isActive()) {
-                return CompletableFuture.completedFuture(true);
+                return CompletableFuture.completedFuture(AccessDecision.ALLOWED);
             }
         }
 
-        // 查询数据库 - 同时检查用户名和UUID。SELECT * 是为了查到后能回填缓存
+        // 查询数据库 - 同时检查用户名和UUID。不带 is_active 过滤, 以区分禁用与不在名单;
+        // ORDER BY is_active DESC 保证同名多行时优先取激活行 (被禁用条目不应遮蔽激活条目)。
         return databaseManager.executeAsync(connection -> {
             String sql = """
                 SELECT * FROM whitelist
                 WHERE (LOWER(name) = LOWER(?) OR uuid = ?)
-                AND is_active = 1
+                ORDER BY is_active DESC
                 LIMIT 1
             """;
 
@@ -360,10 +372,14 @@ public class WhitelistManager {
 
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (!rs.next()) {
-                        return false;
+                        return AccessDecision.NOT_WHITELISTED;
                     }
                     WhitelistEntry entry = mapResultSetToEntry(rs);
-                    // 回填缓存，下次同样查询走内存，避免再去抢异步线程池
+                    if (!entry.isActive()) {
+                        logger.info("访问被禁用: 玩家 {} (UUID: {}) 在白名单中但已被管理员手动关闭", playerName, uuid);
+                        return AccessDecision.DISABLED;
+                    }
+                    // 命中 active 行: 回填缓存, 下次同样查询走内存, 避免再去抢异步线程池
                     if (cacheLoaded) {
                         if (entry.getUuid() != null) {
                             cache.put(entry.getUuid(), entry);
@@ -373,12 +389,95 @@ public class WhitelistManager {
                         }
                     }
                     logger.info("离线模式白名单匹配: 玩家 {} (UUID: {}) 已在白名单中", playerName, uuid);
-                    return true;
+                    return AccessDecision.ALLOWED;
                 }
             }
         }).exceptionally(throwable -> {
-            logger.error("检查离线模式玩家白名单状态失败: {} ({})", playerName, uuid, throwable);
+            // 与历史行为一致: 查询异常按 NOT_WHITELISTED 处理 (严格模式的超时踢人仍由调用方 .get 超时分支负责)
+            logger.error("检查离线模式玩家访问决策失败: {} ({})", playerName, uuid, throwable);
+            return AccessDecision.NOT_WHITELISTED;
+        });
+    }
+
+    /**
+     * 按玩家名设置启用/禁用 (is_active)。同步维护缓存: 缓存只装 active 条目,
+     * 故禁用时从缓存清除该玩家, 启用时重新查出并写回, 避免缓存与库不一致导致禁用不生效或重复查库。
+     *
+     * @return true 表示有行被更新 (玩家存在), false 表示玩家不存在或库异常。
+     */
+    public CompletableFuture<Boolean> setActiveByName(String name, boolean active) {
+        if (name == null || name.trim().isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        String normalizedName = name.trim().toLowerCase();
+
+        return databaseManager.executeTransactionAsync(connection -> {
+            String sql = "UPDATE whitelist SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(name) = ?";
+            try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                stmt.setBoolean(1, active);
+                stmt.setString(2, normalizedName);
+                int affected = stmt.executeUpdate();
+                if (affected == 0) {
+                    return false;
+                }
+
+                if (active) {
+                    // 启用: 重新查出该条目写回缓存 (缓存只装 active 条目)
+                    try (PreparedStatement q = connection.prepareStatement(
+                            "SELECT * FROM whitelist WHERE LOWER(name) = ? LIMIT 1")) {
+                        q.setString(1, normalizedName);
+                        try (ResultSet rs = q.executeQuery()) {
+                            if (rs.next() && cacheLoaded) {
+                                WhitelistEntry entry = mapResultSetToEntry(rs);
+                                cache.put("name:" + normalizedName, entry);
+                                if (entry.getUuid() != null) {
+                                    cache.put(entry.getUuid(), entry);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 禁用: 从缓存清除该玩家 (name key 与对应 uuid key)
+                    cache.entrySet().removeIf(e -> e.getValue() != null && name.equalsIgnoreCase(e.getValue().getName()));
+                }
+                logger.info("{}白名单玩家: {}", active ? "启用" : "禁用", name);
+                return true;
+            }
+        }).exceptionally(throwable -> {
+            logger.error("设置白名单启用状态失败: {} -> {}", name, active, throwable);
             return false;
+        });
+    }
+
+    /**
+     * 按玩家名批量设置启用/禁用。逐名复用 {@link #setActiveByName} 以共享缓存维护逻辑。
+     */
+    public CompletableFuture<BatchOperation.BatchResult> batchSetActiveByName(List<String> names, boolean active) {
+        if (names == null || names.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    new BatchOperation.BatchResult(0, 0, 0, List.of("批量操作为空"), new ArrayList<>(), new ArrayList<>()));
+        }
+        int total = names.size();
+        return CompletableFuture.supplyAsync(() -> {
+            List<String> errors = new ArrayList<>();
+            int successCount = 0;
+            int failureCount = 0;
+            for (String name : names) {
+                // 逐名 join: setActiveByName 内部已在数据库线程池异步执行, 此处串行等待结果汇总
+                Boolean ok = setActiveByName(name, active).join();
+                if (Boolean.TRUE.equals(ok)) {
+                    successCount++;
+                } else {
+                    failureCount++;
+                    errors.add("玩家不存在或更新失败: " + name);
+                }
+            }
+            logger.info("批量{}白名单完成 - 成功: {}, 失败: {}", active ? "启用" : "禁用", successCount, failureCount);
+            return new BatchOperation.BatchResult(total, successCount, failureCount, errors, new ArrayList<>(), new ArrayList<>());
+        }).exceptionally(throwable -> {
+            logger.error("批量设置白名单启用状态失败", throwable);
+            return new BatchOperation.BatchResult(total, 0, total,
+                    List.of("批量操作执行失败: " + throwable.getMessage()), new ArrayList<>(), new ArrayList<>());
         });
     }
     
@@ -732,17 +831,31 @@ public class WhitelistManager {
     }
     
     /**
-     * 分页查询白名单条目
+     * 分页查询白名单条目 (仅激活, 默认行为)。游戏内命令等沿用此重载。
      */
     public CompletableFuture<PaginatedResult<WhitelistEntry>> getWhitelistPaginated(
-            int page, int size, String search, String source, String addedBy, 
+            int page, int size, String search, String source, String addedBy,
             String sort, String order, String startDate, String endDate) {
-        
+        return getWhitelistPaginated(page, size, search, source, addedBy, sort, order, startDate, endDate, false);
+    }
+
+    /**
+     * 分页查询白名单条目。
+     *
+     * @param includeInactive true 时返回全部条目 (含被禁用), 供网页管理界面展示并切换启用/禁用开关;
+     *                        false 时仅返回 is_active=1 (原行为)。被禁用条目若不展示, 管理员将无从重新启用。
+     */
+    public CompletableFuture<PaginatedResult<WhitelistEntry>> getWhitelistPaginated(
+            int page, int size, String search, String source, String addedBy,
+            String sort, String order, String startDate, String endDate, boolean includeInactive) {
+
         return databaseManager.executeAsync(connection -> {
             // 构建查询条件
             WhitelistQueryBuilder queryBuilder = new WhitelistQueryBuilder()
-                    .filterByActive(true)
                     .paginate(page, size);
+            if (!includeInactive) {
+                queryBuilder.filterByActive(true);
+            }
             
             // 添加搜索条件
             if (search != null && !search.trim().isEmpty()) {

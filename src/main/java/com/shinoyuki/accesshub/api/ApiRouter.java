@@ -130,9 +130,25 @@ public class ApiRouter extends HttpServlet {
         }
         
         logger.debug("PUT request to: {}", path);
-        
-        // 目前没有PUT请求的路由
-        send405Response(response, "Method not allowed for this endpoint");
+
+        // 检查认证
+        if (!isAuthenticated(request, path)) {
+            sendAuthFailedResponse(response);
+            return;
+        }
+
+        try {
+            // 启用/禁用某条白名单: PUT /api/v1/whitelist/by-name/{name}/status
+            if (path != null && path.startsWith("/api/v1/whitelist/by-name/") && path.endsWith("/status")) {
+                String name = path.substring("/api/v1/whitelist/by-name/".length(), path.length() - "/status".length());
+                whitelistController.handleSetActive(request, response, name);
+            } else {
+                send404Response(response, "Endpoint not found");
+            }
+        } catch (Exception e) {
+            logger.error("Error handling PUT request to {}", path, e);
+            send500Response(response, "Internal server error");
+        }
     }
     
     @Override

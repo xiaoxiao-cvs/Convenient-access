@@ -232,6 +232,12 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
                 "&c您不在服务器白名单中！\n&7请联系管理员申请加入白名单");
     }
 
+    @Override
+    public String getWhitelistDisabledMessage() {
+        return config.getOrElse("whitelist.disabled-message",
+                "&c您已在白名单中，但管理员手动关闭了您的访问权限\n&7如有疑问请联系管理员");
+    }
+
     @Override public String getContactInfo()           { return config.getOrElse("whitelist.contact-info", "请联系管理员"); }
     @Override public int    getTokenExpiryHours()      { return config.getIntOrElse("whitelist.token-expiry-hours", 24); }
     @Override public boolean isAutoCleanupTokens()     { return config.getOrElse("whitelist.auto-cleanup-tokens", true); }

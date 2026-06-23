@@ -12,10 +12,14 @@ import java.util.concurrent.TimeoutException;
 import com.mojang.authlib.GameProfile;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.whitelist.AccessDecision;
 import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
+import net.minecraft.network.Connection;
+import net.minecraft.network.PacketSendListener;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.event.entity.player.PlayerEvent;
@@ -115,16 +119,22 @@ public final class PlayerLoginListener {
         // 说明: 理论上 PreLogin 阶段的 PlayerNegotiationEvent 能更早拒绝, 但实测在部分整合包环境
         // (如 Sinytra Connector) 该事件不被触发, 故以 PlayerLoggedInEvent (核心事件, 必然触发) 兜底,
         // 非白名单玩家进服后立即被踢。两个事件并存形成防御纵深。
-        whitelistManager.isPlayerWhitelistedOffline(name, uuid).thenAccept(allowed -> {
+        whitelistManager.checkAccess(name, uuid).thenAccept(decision -> {
             if (server == null) {
                 return;
             }
             server.execute(() -> {
-                if (Boolean.TRUE.equals(allowed)) {
+                if (decision == AccessDecision.ALLOWED) {
                     processWhitelistedJoin(player, name, uuid);
                 } else {
-                    player.connection.disconnect(Component.literal(formatKickMessage(name)));
-                    logger.warn("拒绝玩家进入 (未在白名单): {} ({}) IP: {}", name, uuid, ip);
+                    // PLAY 阶段: player.connection (ServerGamePacketListenerImpl) 的 disconnect 会先发
+                    // ClientboundDisconnectPacket 再关通道, 文案能正常显示, 无需 login 阶段的手动发包补丁。
+                    String message = decision == AccessDecision.DISABLED
+                            ? formatDisabledMessage(name)
+                            : formatKickMessage(name);
+                    player.connection.disconnect(Component.literal(message));
+                    logger.warn("拒绝玩家进入 ({}): {} ({}) IP: {}",
+                            decision == AccessDecision.DISABLED ? "白名单被禁用" : "未在白名单", name, uuid, ip);
                     logUnauthorizedAccess(name, uuid, ip);
                 }
             });
@@ -223,9 +233,9 @@ public final class PlayerLoginListener {
         logger.info("=== 白名单验证: {} ({}) IP: {} ===", playerName, playerUuid, ipAddress);
 
         try {
-            CompletableFuture<Boolean> future =
-                    whitelistManager.isPlayerWhitelistedOffline(playerName, playerUuid);
-            Boolean isWhitelisted = future.get(WHITELIST_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            CompletableFuture<AccessDecision> future =
+                    whitelistManager.checkAccess(playerName, playerUuid);
+            AccessDecision decision = future.get(WHITELIST_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             long elapsedMs = System.currentTimeMillis() - startedAt;
 
             if (elapsedMs >= SLOW_CHECK_WARN_THRESHOLD_MS) {
@@ -235,15 +245,19 @@ public final class PlayerLoginListener {
                         WHITELIST_CHECK_TIMEOUT_SECONDS * 1000L - elapsedMs);
             }
 
-            if (Boolean.TRUE.equals(isWhitelisted)) {
+            if (decision == AccessDecision.ALLOWED) {
                 logger.info("允许玩家连接 (在白名单中): {} ({}) 耗时 {}ms",
                         playerName, playerUuid, elapsedMs);
                 return;
             }
 
-            String kickMessage = formatKickMessage(playerName);
-            event.getConnection().disconnect(Component.literal(kickMessage));
-            logger.warn("拒绝玩家连接 (未在白名单): {} ({}) IP: {}",
+            // 被禁用与不在名单展示不同文案; 统一走 login 阶段安全断连 (先发包再关通道)
+            String message = decision == AccessDecision.DISABLED
+                    ? formatDisabledMessage(playerName)
+                    : formatKickMessage(playerName);
+            disconnectDuringLogin(event.getConnection(), Component.literal(message));
+            logger.warn("拒绝玩家连接 ({}): {} ({}) IP: {}",
+                    decision == AccessDecision.DISABLED ? "白名单被禁用" : "未在白名单",
                     playerName, playerUuid, ipAddress);
             logUnauthorizedAccess(playerName, playerUuid, ipAddress);
 
@@ -266,7 +280,7 @@ public final class PlayerLoginListener {
                                     String playerName, String playerUuid, String ipAddress,
                                     String reason) {
         if (config.isWhitelistStrictMode()) {
-            event.getConnection().disconnect(Component.literal("§c白名单验证失败, 请稍后重试"));
+            disconnectDuringLogin(event.getConnection(), Component.literal("§c白名单验证失败, 请稍后重试"));
             logger.warn("[Whitelist] 严格模式踢出: {} ({}) IP: {} - 原因: {}",
                     playerName, playerUuid, ipAddress, reason);
         } else {
@@ -275,8 +289,30 @@ public final class PlayerLoginListener {
         }
     }
 
+    /**
+     * login (协商) 阶段带文案安全断连。
+     *
+     * 修复"踢出文案变成连接中断"的 bug: 1.20.1 的 {@link Connection#disconnect(Component)} 只关闭 TCP
+     * 通道并把原因存到本地字段, 不向客户端发送任何断开包 — 客户端遂只能显示通用的"连接中断"而非踢出文案。
+     * 必须先发 {@link ClientboundLoginDisconnectPacket} 把文案送达客户端, 待其发出后再关通道,
+     * 与原版 ServerLoginPacketListenerImpl#disconnect 行为一致。用 PacketSendListener.thenRun 确保发包
+     * 完成后才关闭 (本方法在异步线程调用, 直接 send 后立即 disconnect 可能在包刷出前就关掉通道)。
+     */
+    private void disconnectDuringLogin(Connection connection, Component reason) {
+        connection.send(new ClientboundLoginDisconnectPacket(reason),
+                PacketSendListener.thenRun(() -> connection.disconnect(reason)));
+    }
+
     private String formatKickMessage(String playerName) {
         return config.getWhitelistKickMessage()
+                .replace("{player}", playerName)
+                .replace("{contact}", config.getContactInfo())
+                .replace("&", "§");
+    }
+
+    /** 在白名单但被管理员手动禁用时的提示文案。 */
+    private String formatDisabledMessage(String playerName) {
+        return config.getWhitelistDisabledMessage()
                 .replace("{player}", playerName)
                 .replace("{contact}", config.getContactInfo())
                 .replace("&", "§");

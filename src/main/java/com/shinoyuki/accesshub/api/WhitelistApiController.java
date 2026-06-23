@@ -96,8 +96,8 @@ public class WhitelistApiController {
             final int page = (pageStr != null && !pageStr.isEmpty()) ? Integer.parseInt(pageStr) : 1;
             final int size = (sizeStr != null && !sizeStr.isEmpty()) ? Integer.parseInt(sizeStr) : 20;
             
-            // 使用现有的分页查询方法，但获取所有数据
-            whitelistManager.getWhitelistPaginated(page, size, search, source, addedBy, sort, order, startDate, endDate)
+            // 网页管理界面需展示全部条目 (含被禁用), 否则禁用后条目消失、管理员无从重新启用 -> includeInactive=true
+            whitelistManager.getWhitelistPaginated(page, size, search, source, addedBy, sort, order, startDate, endDate, true)
                 .thenAccept(result -> {
                     // 直接返回所有数据
                     sendJsonResponse(response, 200, ApiResponse.success(result));
@@ -432,6 +432,61 @@ public class WhitelistApiController {
     }
     
     /**
+     * 处理PUT /api/v1/whitelist/by-name/{name}/status - 启用/禁用某条白名单。
+     * 请求体: {"is_active": true|false}。禁用后该玩家进服将被拒, 并展示"管理员已关闭访问权限"专属提示。
+     * 按名定位 (与删除端点一致), 因 UUID 待补充的条目 uuid 为空。
+     */
+    public void handleSetActive(HttpServletRequest request, HttpServletResponse response, String playerName) throws IOException {
+        long startTime = System.currentTimeMillis();
+        String requestBody = null;
+        try {
+            final String name = java.net.URLDecoder.decode(playerName, "UTF-8");
+            if (!isValidPlayerName(name)) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("玩家名称格式无效: " + name));
+                logOperation("SET_ACTIVE", null, name, request, null, 400, System.currentTimeMillis() - startTime);
+                return;
+            }
+
+            requestBody = readRequestBody(request);
+            JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
+            if (!json.has("is_active") || json.get("is_active").isJsonNull()) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: is_active"));
+                logOperation("SET_ACTIVE", null, name, request, requestBody, 400, System.currentTimeMillis() - startTime);
+                return;
+            }
+            final boolean active = json.get("is_active").getAsBoolean();
+            final String finalRequestBody = requestBody;
+
+            whitelistManager.setActiveByName(name, active)
+                .thenAccept(success -> {
+                    long executionTime = System.currentTimeMillis() - startTime;
+                    if (Boolean.TRUE.equals(success)) {
+                        JsonObject result = new JsonObject();
+                        result.addProperty("name", name);
+                        result.addProperty("is_active", active);
+                        sendJsonResponse(response, 200, ApiResponse.success(result, active ? "已启用" : "已禁用"));
+                        logOperation("SET_ACTIVE", null, name, request, finalRequestBody, 200, executionTime);
+                    } else {
+                        sendJsonResponse(response, 404, ApiResponse.notFound("玩家不存在"));
+                        logOperation("SET_ACTIVE", null, name, request, finalRequestBody, 404, executionTime);
+                    }
+                })
+                .exceptionally(throwable -> {
+                    logger.error("设置白名单启用状态失败: {}", name, throwable);
+                    sendJsonResponse(response, 500, ApiResponse.error("设置启用状态失败"));
+                    logOperation("SET_ACTIVE", null, name, request, finalRequestBody, 500, System.currentTimeMillis() - startTime);
+                    return null;
+                })
+                .join();
+
+        } catch (Exception e) {
+            logger.error("处理设置启用状态请求失败", e);
+            sendJsonResponse(response, 500, ApiResponse.error("服务器内部错误"));
+            logOperation("SET_ACTIVE", null, null, request, requestBody, 500, System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /**
      * 处理GET /api/v1/whitelist/stats - 获取白名单统计信息
      */
     public void handleGetStats(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -541,46 +596,52 @@ public class WhitelistApiController {
             String requestBody = readRequestBody(request);
             JsonObject json = JsonParser.parseString(requestBody).getAsJsonObject();
             
-            // 参数验证
-            if (!json.has("operation") || !json.has("players") || !json.has("source")) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: operation, players, source"));
+            // 参数验证 (source 仅 add 操作必需, 故不在此强制)
+            if (!json.has("operation") || !json.has("players")) {
+                sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: operation, players"));
                 return;
             }
-            
+
             String operation = json.get("operation").getAsString();
             JsonArray playersArray = json.getAsJsonArray("players");
-            String sourceStr = json.get("source").getAsString();
-            
-            // 验证source参数
-            WhitelistEntry.Source source;
-            try {
-                source = WhitelistEntry.Source.fromString(sourceStr);
-            } catch (IllegalArgumentException e) {
-                sendJsonResponse(response, 400, ApiResponse.badRequest("无效的来源类型: " + sourceStr));
-                return;
-            }
-            
-            // 解析时间戳（可选）
-                LocalDateTime addedAt = json.has("added_at") ? 
-                    LocalDateTime.parse(json.get("added_at").getAsString(), DateTimeFormatter.ISO_LOCAL_DATE_TIME) : 
-                    LocalDateTime.now();
-            
-            
+
             if (playersArray.size() == 0) {
                 sendJsonResponse(response, 400, ApiResponse.badRequest("玩家列表不能为空"));
                 return;
             }
-            
+
             if (playersArray.size() > 100) {
                 sendJsonResponse(response, 400, ApiResponse.badRequest("批量操作最多支持100个玩家"));
                 return;
             }
-            
+
+            // 批量启用/禁用: 按玩家名定位, 无需 source/addedBy/时间戳, 提前分流
+            if ("enable".equalsIgnoreCase(operation) || "disable".equalsIgnoreCase(operation)) {
+                handleBatchSetActive(response, playersArray, "enable".equalsIgnoreCase(operation));
+                return;
+            }
+
             // 获取操作者信息
             String addedByName = json.has("added_by_name") ? json.get("added_by_name").getAsString() : "API";
             String addedByUuid = json.has("added_by_uuid") ? json.get("added_by_uuid").getAsString() : "00000000-0000-0000-0000-000000000000";
-            
+
             if ("add".equalsIgnoreCase(operation)) {
+                // source 与时间戳仅 add 操作需要
+                if (!json.has("source")) {
+                    sendJsonResponse(response, 400, ApiResponse.badRequest("缺少必需参数: source"));
+                    return;
+                }
+                WhitelistEntry.Source source;
+                try {
+                    source = WhitelistEntry.Source.fromString(json.get("source").getAsString());
+                } catch (IllegalArgumentException e) {
+                    sendJsonResponse(response, 400, ApiResponse.badRequest("无效的来源类型: " + json.get("source").getAsString()));
+                    return;
+                }
+                LocalDateTime addedAt = json.has("added_at") ?
+                    LocalDateTime.parse(json.get("added_at").getAsString(), DateTimeFormatter.ISO_LOCAL_DATE_TIME) :
+                    LocalDateTime.now();
+
                 // 批量添加
                 BatchOperation batchOperation = new BatchOperation(
                     BatchOperation.OperationType.ADD, addedByName, addedByUuid
@@ -721,6 +782,53 @@ public class WhitelistApiController {
          }
      }
       
+      /**
+       * 批量启用/禁用 (由 handleBatchOperation 的 enable/disable 分支调用)。玩家按名定位。
+       */
+      private void handleBatchSetActive(HttpServletResponse response, JsonArray playersArray, boolean active) {
+          List<String> names = new ArrayList<>();
+          for (int i = 0; i < playersArray.size(); i++) {
+              JsonObject playerObj = playersArray.get(i).getAsJsonObject();
+              if (!playerObj.has("name")) {
+                  sendJsonResponse(response, 400, ApiResponse.badRequest("启用/禁用操作需要name字段"));
+                  return;
+              }
+              String name = playerObj.get("name").getAsString();
+              if (!isValidPlayerName(name)) {
+                  sendJsonResponse(response, 400, ApiResponse.badRequest("无效的玩家名: " + name));
+                  return;
+              }
+              names.add(name);
+          }
+
+          whitelistManager.batchSetActiveByName(names, active)
+              .thenAccept(result -> {
+                  JsonObject responseData = new JsonObject();
+                  responseData.addProperty("operation", active ? "enable" : "disable");
+                  responseData.addProperty("total_requested", result.getTotalRequested());
+                  responseData.addProperty("success_count", result.getSuccessCount());
+                  responseData.addProperty("failure_count", result.getFailureCount());
+                  responseData.addProperty("success_rate", result.getSuccessRate());
+                  if (!result.getErrors().isEmpty()) {
+                      responseData.add("errors", gson.toJsonTree(result.getErrors()));
+                  }
+
+                  if (result.isCompleteSuccess()) {
+                      sendJsonResponse(response, 200, ApiResponse.success(responseData, active ? "批量启用完成" : "批量禁用完成"));
+                  } else if (result.isCompleteFailure()) {
+                      sendJsonResponse(response, 400, ApiResponse.badRequest(active ? "批量启用全部失败" : "批量禁用全部失败"));
+                  } else {
+                      sendJsonResponse(response, 207, ApiResponse.success(responseData, active ? "批量启用部分成功" : "批量禁用部分成功"));
+                  }
+              })
+              .exceptionally(throwable -> {
+                  logger.error("批量设置启用状态失败", throwable);
+                  sendJsonResponse(response, 500, ApiResponse.error("批量设置启用状态失败"));
+                  return null;
+              })
+              .join();
+      }
+
       /**
        * 验证UUID格式
        */
