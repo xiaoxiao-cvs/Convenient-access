@@ -121,7 +121,8 @@ auth:
 | `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | API Token |
 | `/api/v1/whitelist` | POST | 添加白名单条目 | API Token |
 | `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | API Token |
-| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目 | API Token |
+| `/api/v1/whitelist/by-name/{name}/status` | PUT | 启用/禁用指定玩家的白名单访问权限 | API Token |
+| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目（add/remove/enable/disable） | API Token |
 | `/api/v1/whitelist/regcode` | POST | 为指定玩家名签发一次性注册码（仅发码，不加白） | API Token |
 | `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | API Token |
 | `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Token |
@@ -314,6 +315,8 @@ X-Admin-Password: your-admin-password
 
 > **💡 说明**：当 `uuid` 字段为 `null` 且 `uuid_pending` 为 `true` 时，表示该玩家的UUID将在首次登录时自动补充。
 
+> **💡 关于 `is_active`**：此列表用于后台管理，返回全部条目（含被禁用项）。`is_active` 为 `false` 表示该玩家仍在白名单中、但被管理员手动关闭了访问权限，进服时会被拒并提示"您已在白名单中，但管理员手动关闭了您的访问权限"。可通过下方的 `PUT .../status` 端点切换该状态。
+
 #### `POST /api/v1/whitelist`
 
 添加新的白名单条目（基于WhitelistPlus设计理念）。
@@ -384,9 +387,42 @@ X-Admin-Password: your-admin-password
 }
 ```
 
+#### `PUT /api/v1/whitelist/by-name/{name}/status`
+
+启用/禁用指定玩家的白名单访问权限（按玩家名定位，因 UUID 待补充的条目 `uuid` 为空）。
+
+禁用（`is_active=false`）后，该玩家**仍保留在白名单中**，但进服会被拒绝并提示"您已在白名单中，但管理员手动关闭了您的访问权限"（提示文案可经服务端配置 `whitelist.disabled-message` 修改）。重新启用即恢复访问。与 `DELETE` 的区别：禁用是可逆的临时关停，不删除条目、不丢失 QQ/添加者等信息。
+
+`{name}` 需做 URL 编码。
+
+**请求体：**
+```json
+{
+  "is_active": false
+}
+```
+
+**参数说明：**
+- `is_active` (必需): `true` 启用，`false` 禁用
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "message": "已禁用",
+  "data": {
+    "name": "PlayerName",
+    "is_active": false
+  },
+  "timestamp": 1640995200000
+}
+```
+
+**错误：** 玩家不存在返回 `404`；缺少 `is_active` 返回 `400`。
+
 #### `POST /api/v1/whitelist/batch`
 
-批量操作白名单条目（支持批量添加和删除）。
+批量操作白名单条目，`operation` 支持 `add`（批量添加）、`remove`（批量删除）、`enable`/`disable`（批量启用/禁用）。
 
 **批量添加请求体：**
 ```json
@@ -423,6 +459,19 @@ X-Admin-Password: your-admin-password
   ]
 }
 ```
+
+**批量启用/禁用请求体：** 按玩家名定位，`operation` 取 `enable` 或 `disable`，无需 `source`：
+```json
+{
+  "operation": "disable",
+  "players": [
+    { "name": "Player1" },
+    { "name": "Player2" }
+  ]
+}
+```
+
+> **参数说明**：`source` 仅 `add` 操作必需；`remove` 按 `uuid`、`enable`/`disable` 按 `name` 定位玩家。单次最多 100 个玩家。
 
 **响应示例：**
 ```json
@@ -1112,6 +1161,30 @@ curl -X POST http://localhost:22222/api/v1/whitelist/batch \
     "players": [
       {"uuid": "550e8400-e29b-41d4-a716-446655440000"},
       {"uuid": "550e8400-e29b-41d4-a716-446655440001"}
+    ]
+  }'
+
+# 禁用某玩家的访问权限（保留在白名单, 进服被拒并提示已被管理员关闭）
+curl -X PUT http://localhost:22222/api/v1/whitelist/by-name/Player1/status \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{"is_active": false}'
+
+# 重新启用
+curl -X PUT http://localhost:22222/api/v1/whitelist/by-name/Player1/status \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{"is_active": true}'
+
+# 批量禁用
+curl -X POST http://localhost:22222/api/v1/whitelist/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{
+    "operation": "disable",
+    "players": [
+      {"name": "Player1"},
+      {"name": "Player2"}
     ]
   }'
 ```
