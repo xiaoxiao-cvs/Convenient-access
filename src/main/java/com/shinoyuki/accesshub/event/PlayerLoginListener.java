@@ -4,7 +4,9 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.sql.PreparedStatement;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.database.DatabaseManager;
@@ -41,6 +43,13 @@ public final class PlayerLoginListener {
 
     private static final Logger logger = LoggerFactory.getLogger(PlayerLoginListener.class);
 
+    /**
+     * 被拒玩家延迟踢出秒数。在 join tick 立即踢, 客户端尚在进服序列中途 (接收区块/各 mod 同步配置),
+     * 收到断开包只显示通用"连接中断"而非踢出文案 (实测: 服务端已正确下发文案但客户端不渲染)。延迟数秒待
+     * 客户端完全进入 PLAY 再踢, 等价正常 /kick, 文案稳定可见。重度整合包加载慢, 取较宽裕的冗余值。
+     */
+    private static final long REJECT_DELAY_SECONDS = 3;
+
     private final AccessHubConfig config;
     private final WhitelistManager whitelistManager;
     private final DatabaseManager databaseManager;
@@ -73,44 +82,59 @@ public final class PlayerLoginListener {
             return;
         }
         String name = player.getGameProfile().getName();
-        String uuid = player.getUUID().toString();
+        UUID uuidObj = player.getUUID();
+        String uuid = uuidObj.toString();
         String ip = formatRemoteAddress(player.connection.connection.getRemoteAddress());
         MinecraftServer server = player.getServer();
+        if (server == null) {
+            return;
+        }
 
-        // 白名单拦截 (进服瞬间踢人). 这是唯一拦截点 (PlayerLoggedInEvent 为核心事件, 任何环境必然触发);
-        // 已弃用 LOGIN 协商阶段的提前拦截, 因其断连在本环境不可靠 (客户端只见 "连接重置"). 见类注释。
+        // 唯一拦截点 (PlayerLoggedInEvent 为核心事件, 任何环境必然触发). 已弃用 LOGIN 协商阶段提前拦截 (见类注释)。
+        // 放行: 主线程处理加入; 拒绝: 延迟踢出 (rejectAfterJoin), 等客户端完全进服后再踢, 文案方能显示。
         whitelistManager.checkAccess(name, uuid).thenAccept(decision -> {
-            if (server == null) {
+            if (decision == AccessDecision.ALLOWED) {
+                server.execute(() -> processWhitelistedJoin(player, name, uuid));
+                return;
+            }
+            String message = decision == AccessDecision.DISABLED
+                    ? formatDisabledMessage(name)
+                    : formatKickMessage(name);
+            String reasonTag = decision == AccessDecision.DISABLED ? "白名单被禁用" : "未在白名单";
+            rejectAfterJoin(server, uuidObj, name, ip, Component.literal(message), reasonTag);
+        }).exceptionally(t -> {
+            // 查询异常: 严格模式踢人, 宽松模式放行
+            if (config.isWhitelistStrictMode()) {
+                rejectAfterJoin(server, uuidObj, name, ip,
+                        Component.literal("§c白名单验证失败, 请稍后重试"), "查询异常");
+                logger.warn("[Whitelist] 严格模式踢出 (查询异常): {} - {}", name, t.getMessage());
+            } else {
+                logger.warn("[Whitelist] 宽松模式放行 (查询异常): {} - {}", name, t.getMessage());
+            }
+            return null;
+        });
+    }
+
+    /**
+     * 延迟 {@link #REJECT_DELAY_SECONDS} 秒后踢出被拒玩家。延迟原因见该常量注释:
+     * join tick 立即踢会让客户端只显示"连接中断"而非文案。延迟后等价一次正常 /kick。
+     * 踢出前按 UUID 重新取在线玩家 (期间可能已自行离开/换对象), 并校验 server 仍在运行。
+     */
+    private void rejectAfterJoin(MinecraftServer server, UUID uuid, String name, String ip,
+                                 Component message, String reasonTag) {
+        CompletableFuture.delayedExecutor(REJECT_DELAY_SECONDS, TimeUnit.SECONDS).execute(() -> {
+            if (!server.isRunning()) {
                 return;
             }
             server.execute(() -> {
-                if (decision == AccessDecision.ALLOWED) {
-                    processWhitelistedJoin(player, name, uuid);
-                } else {
-                    // PLAY 阶段: player.connection (ServerGamePacketListenerImpl) 的 disconnect 会先发
-                    // ClientboundDisconnectPacket 再关通道, 文案能正常显示, 无需 login 阶段的手动发包补丁。
-                    String message = decision == AccessDecision.DISABLED
-                            ? formatDisabledMessage(name)
-                            : formatKickMessage(name);
-                    player.connection.disconnect(Component.literal(message));
-                    logger.warn("拒绝玩家进入 ({}): {} ({}) IP: {}",
-                            decision == AccessDecision.DISABLED ? "白名单被禁用" : "未在白名单", name, uuid, ip);
-                    logUnauthorizedAccess(name, uuid, ip);
+                ServerPlayer online = server.getPlayerList().getPlayer(uuid);
+                if (online == null) {
+                    return; // 期间已自行离开
                 }
+                online.connection.disconnect(message);
+                logger.warn("拒绝玩家进入 ({}): {} ({}) IP: {}", reasonTag, name, uuid, ip);
+                logUnauthorizedAccess(name, uuid.toString(), ip);
             });
-        }).exceptionally(t -> {
-            // 查询异常: 严格模式踢人, 宽松模式放行 (与 PreLogin 路径一致)
-            if (server != null) {
-                server.execute(() -> {
-                    if (config.isWhitelistStrictMode()) {
-                        player.connection.disconnect(Component.literal("§c白名单验证失败, 请稍后重试"));
-                        logger.warn("[Whitelist] 严格模式踢出 (查询异常): {} - {}", name, t.getMessage());
-                    } else {
-                        logger.warn("[Whitelist] 宽松模式放行 (查询异常): {} - {}", name, t.getMessage());
-                    }
-                });
-            }
-            return null;
         });
     }
 
