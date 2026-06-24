@@ -72,21 +72,17 @@ public final class PlayerLoginListener {
      */
     @SubscribeEvent
     public void onPlayerNegotiation(PlayerNegotiationEvent event) {
-        GameProfile profile = event.getProfile();
-        // 诊断: 无条件打在最顶, 确认协商事件是否 fire 及 profile 状态 (排查 "协商阶段从不触发" 之谜)。
-        logger.info("[协商诊断] PlayerNegotiationEvent 触发: whitelistEnabled={}, profile={}, name={}, id={}",
-                config.isWhitelistEnabled(), profile,
-                profile == null ? "<null-profile>" : profile.getName(),
-                profile == null ? "<null-profile>" : profile.getId());
         if (!config.isWhitelistEnabled()) {
             return;
         }
-        if (profile == null || profile.getName() == null || profile.getId() == null) {
-            logger.warn("[协商诊断] profile 不完整, 放行交 PLAY 兜底");
-            return;
+        GameProfile profile = event.getProfile();
+        // 协商阶段(离线模式)UUID 常未解析(id=null), 但玩家名已有; 白名单按名查即可 (checkAccess 支持 name-only)。
+        // 故只要求有名字, 不再要求 UUID — 这是之前协商拦截"从不动作"的真正原因。
+        if (profile == null || profile.getName() == null) {
+            return; // 连玩家名都没有才放弃, 交 PLAY 兜底
         }
         String playerName = profile.getName();
-        String playerUuid = profile.getId().toString();
+        String playerUuid = profile.getId() != null ? profile.getId().toString() : null;
         String ipAddress = formatRemoteAddress(event.getConnection().getRemoteAddress());
 
         CompletableFuture<Void> check = CompletableFuture.runAsync(
