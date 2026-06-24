@@ -72,12 +72,18 @@ public final class PlayerLoginListener {
      */
     @SubscribeEvent
     public void onPlayerNegotiation(PlayerNegotiationEvent event) {
+        GameProfile profile = event.getProfile();
+        // 诊断: 无条件打在最顶, 确认协商事件是否 fire 及 profile 状态 (排查 "协商阶段从不触发" 之谜)。
+        logger.info("[协商诊断] PlayerNegotiationEvent 触发: whitelistEnabled={}, profile={}, name={}, id={}",
+                config.isWhitelistEnabled(), profile,
+                profile == null ? "<null-profile>" : profile.getName(),
+                profile == null ? "<null-profile>" : profile.getId());
         if (!config.isWhitelistEnabled()) {
             return;
         }
-        GameProfile profile = event.getProfile();
         if (profile == null || profile.getName() == null || profile.getId() == null) {
-            return; // 拿不到身份, 放行交 PLAY 兜底
+            logger.warn("[协商诊断] profile 不完整, 放行交 PLAY 兜底");
+            return;
         }
         String playerName = profile.getName();
         String playerUuid = profile.getId().toString();
@@ -91,9 +97,11 @@ public final class PlayerLoginListener {
     /** 协商阶段查询并(仅在确定拒绝时)断连。本方法跑在 ForkJoinPool 异步线程 (非 netty 事件循环), 这点对 disconnectDuringLogin 的安全性至关重要。 */
     private void performNegotiationCheck(PlayerNegotiationEvent event,
                                          String playerName, String playerUuid, String ipAddress) {
+        logger.info("[协商诊断] performNegotiationCheck 开始: {} ({})", playerName, playerUuid);
         try {
             AccessDecision decision = whitelistManager.checkAccess(playerName, playerUuid)
                     .get(NEGOTIATION_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            logger.info("[协商诊断] 决策={}: {} ({})", decision, playerName, playerUuid);
             if (decision == AccessDecision.ALLOWED) {
                 return; // 放行: 玩家继续走到 PLAY, 由 PlayerLoggedInEvent 做加入后处理
             }
