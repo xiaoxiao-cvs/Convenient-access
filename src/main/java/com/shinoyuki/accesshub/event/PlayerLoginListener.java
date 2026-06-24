@@ -4,25 +4,18 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.sql.PreparedStatement;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
-import com.mojang.authlib.GameProfile;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.database.DatabaseManager;
 import com.shinoyuki.accesshub.whitelist.AccessDecision;
 import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
-import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.event.entity.player.PlayerEvent;
-import net.minecraftforge.event.entity.player.PlayerNegotiationEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,29 +23,23 @@ import org.slf4j.LoggerFactory;
 /**
  * Forge 白名单事件监听器, 替代 v1 Bukkit WhitelistListener.
  *
- * 事件映射:
- *   v1 AsyncPlayerPreLoginEvent (Bukkit) -> v3 PlayerNegotiationEvent (Forge)
- *   PlayerNegotiationEvent 在玩家完成 handshake / 登录协商但尚未进入游戏世界前触发, 异步安全.
- *   监听器创建 future 通过 event.enqueueWork(future) 入队, Forge 在 negotiation 阶段等待所有 future 完成.
- *   若 future 内部调用 connection.disconnect(...), 玩家立刻被踢出, 不再进入后续阶段.
+ * 仅在 {@link PlayerEvent.PlayerLoggedInEvent}(PLAY 阶段, 核心事件必然触发)做拦截:
+ * 不在白名单 / 被管理员手动禁用的玩家进服瞬间用 {@code player.connection.disconnect(...)}
+ * (原版 ServerGamePacketListenerImpl, 会先发 ClientboundDisconnectPacket 再关通道)踢出, 文案能正常显示。
  *
- * 保留 v1 加固后的全部行为:
- *  - 双 key 缓存查询 (UUID + name) - 由 WhitelistManager.isPlayerWhitelistedOffline 自身实现
- *  - 15s 查询超时, 防止异步线程池堆积无限拖延 negotiation
- *  - 1.5s 慢查询日志预警 (堆积征兆)
- *  - 严格模式: 查询失败默认踢人, 配置可关 (whitelist.strict-mode)
+ * 历史: 曾另在 PlayerNegotiationEvent(LOGIN 协商阶段)提前拦截, 但该 login 阶段断连在本环境
+ * (含 packetfixer/xlpackets 等包管线 mixin)极不可靠 — 表现为客户端只看到 "连接中断 / Connection reset"
+ * 而非踢出文案, 且与 PLAY 阶段拦截存在双重断连竞态。故移除 login 阶段断连, 统一由 PLAY 阶段拦截,
+ * 代价仅是被拒玩家会"进服一瞬再被踢"(可接受), 换取文案稳定可见。详见 [[forge-login-disconnect-gotcha]]。
+ *
+ * 保留的加固行为:
+ *  - 双 key 缓存查询 (UUID + name) - 由 WhitelistManager.checkAccess 自身实现
+ *  - 严格模式: 查询异常默认踢人, 配置可关 (whitelist.strict-mode)
  *  - operation_log 表记录 UNAUTHORIZED_ACCESS 审计条目
- *
- * v3 Forge 环境下日志直接走 SLF4J -> Forge 主 console, 不再需要 v1 的 plugin.getLogger() workaround.
  */
 public final class PlayerLoginListener {
 
     private static final Logger logger = LoggerFactory.getLogger(PlayerLoginListener.class);
-
-    /** 白名单查询超时. 含异步线程池排队 + DB 查询全部时间. */
-    private static final int WHITELIST_CHECK_TIMEOUT_SECONDS = 15;
-    /** 超过此阈值的查询触发慢查询日志, 便于发现线程池堆积征兆. */
-    private static final long SLOW_CHECK_WARN_THRESHOLD_MS = 1500;
 
     private final AccessHubConfig config;
     private final WhitelistManager whitelistManager;
@@ -64,30 +51,6 @@ public final class PlayerLoginListener {
         this.config = config;
         this.whitelistManager = whitelistManager;
         this.databaseManager = databaseManager;
-    }
-
-    @SubscribeEvent
-    public void onPlayerNegotiation(PlayerNegotiationEvent event) {
-        if (!config.isWhitelistEnabled()) {
-            return;
-        }
-
-        GameProfile profile = event.getProfile();
-        if (profile == null) {
-            return;
-        }
-        String playerName = profile.getName();
-        UUID uuidObj = profile.getId();
-        if (playerName == null || uuidObj == null) {
-            return;
-        }
-        String playerUuid = uuidObj.toString();
-        String ipAddress = formatRemoteAddress(event.getConnection().getRemoteAddress());
-
-        CompletableFuture<Void> check = CompletableFuture.runAsync(
-                () -> performWhitelistCheck(event, playerName, playerUuid, ipAddress)
-        );
-        event.enqueueWork(check);
     }
 
     /**
@@ -114,10 +77,8 @@ public final class PlayerLoginListener {
         String ip = formatRemoteAddress(player.connection.connection.getRemoteAddress());
         MinecraftServer server = player.getServer();
 
-        // 白名单拦截 (进服瞬间踢人).
-        // 说明: 理论上 PreLogin 阶段的 PlayerNegotiationEvent 能更早拒绝, 但实测在部分整合包环境
-        // (如 Sinytra Connector) 该事件不被触发, 故以 PlayerLoggedInEvent (核心事件, 必然触发) 兜底,
-        // 非白名单玩家进服后立即被踢。两个事件并存形成防御纵深。
+        // 白名单拦截 (进服瞬间踢人). 这是唯一拦截点 (PlayerLoggedInEvent 为核心事件, 任何环境必然触发);
+        // 已弃用 LOGIN 协商阶段的提前拦截, 因其断连在本环境不可靠 (客户端只见 "连接重置"). 见类注释。
         whitelistManager.checkAccess(name, uuid).thenAccept(decision -> {
             if (server == null) {
                 return;
@@ -155,7 +116,7 @@ public final class PlayerLoginListener {
 
     /**
      * 白名单内玩家的加入后处理: UUID 补全 + 欢迎 + 通知 (对应 v1 onPlayerJoin)。
-     * 调用前已确认在白名单中 (isPlayerWhitelistedOffline 命中)。
+     * 调用前已确认在白名单中 (checkAccess 返回 ALLOWED)。
      */
     private void processWhitelistedJoin(ServerPlayer player, String name, String uuid) {
         whitelistManager.getPlayerByUuid(uuid).thenCompose(byUuid -> {
@@ -224,91 +185,6 @@ public final class PlayerLoginListener {
                 .replace("{player}", player.getGameProfile().getName())
                 .replace("&", "§");
         player.sendSystemMessage(Component.literal(text));
-    }
-
-    private void performWhitelistCheck(PlayerNegotiationEvent event,
-                                       String playerName, String playerUuid, String ipAddress) {
-        long startedAt = System.currentTimeMillis();
-        logger.info("=== 白名单验证: {} ({}) IP: {} ===", playerName, playerUuid, ipAddress);
-
-        try {
-            CompletableFuture<AccessDecision> future =
-                    whitelistManager.checkAccess(playerName, playerUuid);
-            AccessDecision decision = future.get(WHITELIST_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            long elapsedMs = System.currentTimeMillis() - startedAt;
-
-            if (elapsedMs >= SLOW_CHECK_WARN_THRESHOLD_MS) {
-                logger.warn("[Whitelist] 慢查询: {} 耗时 {}ms (阈值 {}ms, 距离 {}s 超时还有 {}ms)",
-                        playerName, elapsedMs, SLOW_CHECK_WARN_THRESHOLD_MS,
-                        WHITELIST_CHECK_TIMEOUT_SECONDS,
-                        WHITELIST_CHECK_TIMEOUT_SECONDS * 1000L - elapsedMs);
-            }
-
-            if (decision == AccessDecision.ALLOWED) {
-                logger.info("允许玩家连接 (在白名单中): {} ({}) 耗时 {}ms",
-                        playerName, playerUuid, elapsedMs);
-                return;
-            }
-
-            // 被禁用与不在名单展示不同文案; 统一走 login 阶段安全断连 (先发包再关通道)
-            String message = decision == AccessDecision.DISABLED
-                    ? formatDisabledMessage(playerName)
-                    : formatKickMessage(playerName);
-            disconnectDuringLogin(event.getConnection(), Component.literal(message));
-            logger.warn("拒绝玩家连接 ({}): {} ({}) IP: {}",
-                    decision == AccessDecision.DISABLED ? "白名单被禁用" : "未在白名单",
-                    playerName, playerUuid, ipAddress);
-            logUnauthorizedAccess(playerName, playerUuid, ipAddress);
-
-        } catch (TimeoutException e) {
-            long elapsedMs = System.currentTimeMillis() - startedAt;
-            handleQueryFailure(event, playerName, playerUuid, ipAddress,
-                    String.format("查询超时 (>=%ds, 实际 %dms) - 异步线程池可能堆积",
-                            WHITELIST_CHECK_TIMEOUT_SECONDS, elapsedMs));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            handleQueryFailure(event, playerName, playerUuid, ipAddress,
-                    "查询被中断: " + e.getMessage());
-        } catch (Exception e) {
-            handleQueryFailure(event, playerName, playerUuid, ipAddress,
-                    "查询异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
-        }
-    }
-
-    private void handleQueryFailure(PlayerNegotiationEvent event,
-                                    String playerName, String playerUuid, String ipAddress,
-                                    String reason) {
-        if (config.isWhitelistStrictMode()) {
-            disconnectDuringLogin(event.getConnection(), Component.literal("§c白名单验证失败, 请稍后重试"));
-            logger.warn("[Whitelist] 严格模式踢出: {} ({}) IP: {} - 原因: {}",
-                    playerName, playerUuid, ipAddress, reason);
-        } else {
-            logger.warn("[Whitelist] 宽松模式放行: {} ({}) - 原因: {}",
-                    playerName, playerUuid, reason);
-        }
-    }
-
-    /**
-     * login (协商) 阶段带文案安全断连, 严格镜像原版 ServerLoginPacketListenerImpl#disconnect。
-     *
-     * 背景: 1.20.1 的 {@link Connection#disconnect(Component)} 只 channel.close() 不发断开包, 客户端只
-     * 会看到通用"连接中断"。故须先发 {@link ClientboundLoginDisconnectPacket} 把文案送达, 再关通道。
-     *
-     * 关键(踩坑): send 与 disconnect 必须在本方法所在的【异步线程】(performWhitelistCheck 跑在
-     * ForkJoinPool, 非 netty 事件循环)上【同步顺序】调用 — 绝不能把 disconnect 放进 PacketSendListener
-     * 回调。因为该回调在 netty 事件循环线程触发, 而 Connection.disconnect 内部是
-     * channel.close().awaitUninterruptibly() (阻塞等待自身 close future); 在事件循环线程上这样阻塞会触发
-     * netty BlockingOperationException, 通道被异常关闭, 客户端反而收到 "连接重置/Connection reset"。
-     * 同线程顺序调用则: send 把写任务排进事件循环, disconnect 的 close 任务紧随其后, 事件循环按序先刷包再关闭,
-     * awaitUninterruptibly 阻塞的只是本异步线程(无害)。
-     */
-    private void disconnectDuringLogin(Connection connection, Component reason) {
-        try {
-            connection.send(new ClientboundLoginDisconnectPacket(reason));
-            connection.disconnect(reason);
-        } catch (Exception e) {
-            logger.error("登录阶段带文案断连失败", e);
-        }
     }
 
     private String formatKickMessage(String playerName) {
