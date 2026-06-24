@@ -8,40 +8,44 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import com.mojang.authlib.GameProfile;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.database.DatabaseManager;
 import com.shinoyuki.accesshub.whitelist.AccessDecision;
 import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerNegotiationEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Forge 白名单事件监听器, 替代 v1 Bukkit WhitelistListener.
+ * Forge 白名单事件监听器, 替代 v1 Bukkit WhitelistListener. 双层拦截:
  *
- * 仅在 {@link PlayerEvent.PlayerLoggedInEvent}(PLAY 阶段, 核心事件必然触发)做拦截:
- * 不在白名单 / 被管理员手动禁用的玩家进服瞬间用 {@code player.connection.disconnect(...)}
- * (原版 ServerGamePacketListenerImpl, 会先发 ClientboundDisconnectPacket 再关通道)踢出, 文案能正常显示。
+ * 1. {@link PlayerNegotiationEvent}(LOGIN 协商阶段, best-effort): 在玩家进入世界前于"正在登录"界面拒绝,
+ *    像 Bukkit AsyncPlayerPreLoginEvent 那样不加载地形。仅在确定性"拒绝"决策时动作; 查询超时/异常一律
+ *    放行交 PLAY 兜底。该 login 阶段断连在重度整合包(含 packetfixer/xlpackets 包管线 mixin)下能否被客户端
+ *    渲染出文案并不可靠 — 故只当"尽力而为的提前拦截", 不作为唯一防线。
+ * 2. {@link PlayerEvent.PlayerLoggedInEvent}(PLAY 阶段, 核心事件必然触发, 唯一可靠防线): 玩家若走到 PLAY
+ *    (协商未 fire / 协商断连未真正关闭连接), 用原版 {@code player.connection.disconnect} 延迟数秒踢出,
+ *    文案稳定可见 (见 {@link #REJECT_DELAY_SECONDS})。
  *
- * 历史: 曾另在 PlayerNegotiationEvent(LOGIN 协商阶段)提前拦截, 但该 login 阶段断连在本环境
- * (含 packetfixer/xlpackets 等包管线 mixin)极不可靠 — 表现为客户端只看到 "连接中断 / Connection reset"
- * 而非踢出文案, 且与 PLAY 阶段拦截存在双重断连竞态。故移除 login 阶段断连, 统一由 PLAY 阶段拦截,
- * 代价仅是被拒玩家会"进服一瞬再被踢"(可接受), 换取文案稳定可见。详见 [[forge-login-disconnect-gotcha]]。
- *
- * 保留的加固行为:
- *  - 双 key 缓存查询 (UUID + name) - 由 WhitelistManager.checkAccess 自身实现
- *  - 严格模式: 查询异常默认踢人, 配置可关 (whitelist.strict-mode)
- *  - operation_log 表记录 UNAUTHORIZED_ACCESS 审计条目
+ * 不会双踢: 协商成功关闭连接 -> PlayerLoggedInEvent 永不触发 (Forge 生命周期保证); 协商未关闭 -> 只有 PLAY 生效。
+ * 断连写法的踩坑史与正确姿势见 disconnectDuringLogin 注释 / [[forge-login-disconnect-gotcha]]。
  */
 public final class PlayerLoginListener {
 
     private static final Logger logger = LoggerFactory.getLogger(PlayerLoginListener.class);
+
+    /** 协商阶段白名单查询超时. 超时/异常一律不在协商阶段动作, 交 PLAY 阶段兜底 (含异步线程池排队 + DB 查询)。 */
+    private static final int NEGOTIATION_CHECK_TIMEOUT_SECONDS = 10;
 
     /**
      * 被拒玩家延迟踢出秒数。在 join tick 立即踢, 客户端尚在进服序列中途 (接收区块/各 mod 同步配置),
@@ -60,6 +64,79 @@ public final class PlayerLoginListener {
         this.config = config;
         this.whitelistManager = whitelistManager;
         this.databaseManager = databaseManager;
+    }
+
+    /**
+     * 协商阶段 (LOGIN) best-effort 提前拦截。在 enqueueWork 的异步线程做白名单查询; 仅当确定性"拒绝"时
+     * 于登录界面断连 (不进地形)。查询超时/异常/放行一律不在此动作, 交 PLAY 阶段 (PlayerLoggedInEvent) 兜底。
+     */
+    @SubscribeEvent
+    public void onPlayerNegotiation(PlayerNegotiationEvent event) {
+        if (!config.isWhitelistEnabled()) {
+            return;
+        }
+        GameProfile profile = event.getProfile();
+        if (profile == null || profile.getName() == null || profile.getId() == null) {
+            return; // 拿不到身份, 放行交 PLAY 兜底
+        }
+        String playerName = profile.getName();
+        String playerUuid = profile.getId().toString();
+        String ipAddress = formatRemoteAddress(event.getConnection().getRemoteAddress());
+
+        CompletableFuture<Void> check = CompletableFuture.runAsync(
+                () -> performNegotiationCheck(event, playerName, playerUuid, ipAddress));
+        event.enqueueWork(check);
+    }
+
+    /** 协商阶段查询并(仅在确定拒绝时)断连。本方法跑在 ForkJoinPool 异步线程 (非 netty 事件循环), 这点对 disconnectDuringLogin 的安全性至关重要。 */
+    private void performNegotiationCheck(PlayerNegotiationEvent event,
+                                         String playerName, String playerUuid, String ipAddress) {
+        try {
+            AccessDecision decision = whitelistManager.checkAccess(playerName, playerUuid)
+                    .get(NEGOTIATION_CHECK_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (decision == AccessDecision.ALLOWED) {
+                return; // 放行: 玩家继续走到 PLAY, 由 PlayerLoggedInEvent 做加入后处理
+            }
+            String message = decision == AccessDecision.DISABLED
+                    ? formatDisabledMessage(playerName)
+                    : formatKickMessage(playerName);
+            disconnectDuringLogin(event.getConnection(), Component.literal(message));
+            logger.warn("协商阶段拒绝 ({}): {} ({}) IP: {}",
+                    decision == AccessDecision.DISABLED ? "白名单被禁用" : "未在白名单",
+                    playerName, playerUuid, ipAddress);
+            logUnauthorizedAccess(playerName, playerUuid, ipAddress);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warn("[Whitelist] 协商阶段查询被中断, 交 PLAY 兜底: {} ({})", playerName, playerUuid);
+        } catch (Exception e) {
+            // 查询超时/异常: 不在协商阶段动作 (避免误踢), 放行交 PLAY 阶段处理 (含严格模式)。
+            logger.warn("[Whitelist] 协商阶段查询未决, 交 PLAY 兜底: {} ({}) - {}",
+                    playerName, playerUuid, e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * login (协商) 阶段带文案断连。严格镜像原版 ServerLoginPacketListenerImpl#disconnect: 同线程顺序
+     * send(ClientboundLoginDisconnectPacket) 再 connection.disconnect。
+     *
+     * 线程安全的唯一正确写法 (已对照 1.20.1 官方映射源码核实, 见 [[forge-login-disconnect-gotcha]]):
+     * 本方法必须在【非 netty 事件循环线程】(performNegotiationCheck 跑在 ForkJoinPool) 上同步顺序调用。
+     *  - Connection.send 用 writeAndFlush 且 off-loop 时把写任务排进事件循环; 紧随的 disconnect 之 close 任务
+     *    排在其后, 事件循环 FIFO 保证"先刷断开包, 后关通道"。awaitUninterruptibly 阻塞的只是本异步线程(无害)。
+     *  - 绝不可用 PacketSendListener.thenRun(...) 包 disconnect (c6f260d), 也绝不可用 channel.eventLoop().execute(disconnect):
+     *    二者都把 disconnect 搬到事件循环线程, 而 disconnect 内部 channel.close().awaitUninterruptibly() 在事件循环
+     *    线程上等待自身 close future -> netty BlockingOperationException -> 通道异常关闭 -> 客户端 "连接重置"。
+     *
+     * 注意: 即便写法正确, 在含 packetfixer/xlpackets 的整合包里客户端能否渲染该早期断开包仍不确定; 失败时连接会
+     * 走到 PLAY 阶段由 PlayerLoggedInEvent 延迟踢兜底 (文案可见)。故本拦截是 best-effort, 非唯一防线。
+     */
+    private void disconnectDuringLogin(Connection connection, Component reason) {
+        try {
+            connection.send(new ClientboundLoginDisconnectPacket(reason));
+            connection.disconnect(reason);
+        } catch (Exception e) {
+            logger.error("协商阶段带文案断连失败, 交 PLAY 阶段兜底", e);
+        }
     }
 
     /**
