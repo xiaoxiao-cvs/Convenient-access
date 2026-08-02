@@ -1,466 +1,448 @@
-# ConvenientAccess API 文档
+# AccessHub API 文档
 
-> 🎉 **v0.5.0 重大更新**：基于 WhitelistPlus 设计理念重构！现在添加白名单**只需玩家名**，UUID会在首次登录时自动补充！
-
-## 🌟 新特性亮点
-
-- ✨ **简化API**：添加白名单只需 `name` 和 `source` 两个参数
-- 🔄 **智能UUID补充**：玩家登录时自动补充UUID，无需手动获取
-- 🎮 **完美兼容**：支持离线和正版服务器，适应各种环境
-- 📊 **增强统计**：新增UUID待补充状态、来源分解等详细统计
-- 🔧 **批量操作**：支持批量添加/删除，提高管理效率
-- 🔐 **安全认证**：可配置的API认证系统，支持自动生成的API令牌
+> 本文档对应 Forge mod `shinoyuki_accesshub`（入口 `AccessHubMod`，包 `com.shinoyuki.accesshub`）。
+> 仓库内另有一套 `com.xaoxiao.convenientaccess` 遗留 Bukkit 插件代码，**不再对外提供服务**，本文档不描述它。
 
 ## 概述
 
-ConvenientAccess 提供了一套简洁的 RESTful API，用于管理 Minecraft 1.20.1 Arclight 服务器的白名单系统。基于 WhitelistPlus 设计理念，极大简化了白名单管理流程。所有 API 端点都返回 JSON 格式的数据，专注于核心功能和服务器监控。
+AccessHub 通过内置 Jetty 暴露一套 RESTful API，用于管理 Minecraft 1.20.1 Forge 服务端的白名单、查询玩家数据与服务器性能。除物品图标端点返回 `image/png` 外，所有端点返回 JSON。
+
+白名单采用"玩家名优先，UUID 后补"策略：加白只需玩家名，UUID 在玩家首次登录时由登录监听器自动补充。
 
 ## 快速导航
 
-- [基础信息](#基础信息) - API基础配置和认证说明
-- [认证系统](#-认证系统) - API认证方式和安全配置
-- [白名单管理API](#白名单管理-api) - 白名单增删改查操作
-- [用户注册API](#用户注册-api) - 用户自助注册功能
-- [玩家数据查询API](#玩家数据查询-api) - 获取玩家详细信息 **[新增]**
-- [服务器监控API](#服务器监控-api) - 服务器状态和性能监控
-- [UUID自动补充机制](#-uuid自动补充机制) - 简化白名单管理流程
-- [响应格式](#响应格式) - 统一的响应格式说明
+- [基础信息](#基础信息) - 端口、编码等基础配置
+- [认证系统](#认证系统) - 三类端点的鉴权方式与配置位置
+- [所有可用端点](#所有可用端点) - 完整路由表（以 `ApiRouter` 为准）
+- [响应格式](#响应格式) - 两种响应包装的差异
+- [白名单管理 API](#白名单管理-api)
+- [管理员认证 API](#管理员认证-api)
+- [操作日志 API](#操作日志-api)
+- [玩家数据查询 API](#玩家数据查询-api)
+- [服务器监控 API](#服务器监控-api)
+- [物品图标 API](#物品图标-api)
+- [UUID 自动补充机制](#uuid-自动补充机制)
+- [错误代码说明](#错误代码说明)
 
 ## 基础信息
 
-- **基础URL**: `http://your-server:22222/api/v1`
+- **基础 URL**: `http://your-server:22222/api/v1`
 - **内容类型**: `application/json`
 - **字符编码**: `UTF-8`
-- **认证方式**: API Token 或 管理员密码认证
-- **频率限制**: 无特殊限制（适合管理员使用）
+- **默认端口**: `22222`（`http.port`），监听地址默认 `0.0.0.0`（`http.host`）
+- **认证方式**: `X-API-Key`（API 令牌）或 `Authorization: Bearer <jwt>`（管理员 JWT）
+- **频率限制**: 服务端**未实现** HTTP 层限流。仅 `/api/v1/player` 有并发闸门（最多 5 个并发查询），`/api/v1/admin/login` 有登录失败次数限制。
 
-## 🔐 认证系统
+## 认证系统
 
-### 认证配置
+### 配置位置
 
-插件支持可配置的认证系统，默认启用认证功能：
+配置文件为 MC 服务端下的 `config/Shinoyuki-Optimize/shinoyuki_accesshub/common.toml`（TOML，非 YAML）：
 
-```yaml
-# config.yml
-auth:
-  enabled: true  # 是否启用认证（默认：true）
-api-token: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # 64位API令牌
-token-prefix: "sk-"  # 令牌前缀
-admin-password: "xxxxxxxxxxxx"  # 12位管理员密码
+```toml
+[api.auth]
+# 是否启用 API 鉴权 (生产环境强烈建议开启)
+enabled = true
+# 管理员密码 (首次启动自动生成 12 位)
+admin-password = "xxxxxxxxxxxx"
+# API 访问令牌 (首次启动自动生成 sk- 开头的 64 位)
+api-token = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+token-prefix = "sk-"
+# JWT 签名密钥 (首次启动生成 base64 256 位强随机). 修改此值会让所有已签发的 token 立即失效
+jwt-secret = "..."
+
+[api.auth.login-attempt-limit]
+enabled = true
+max-attempts = 5
+lock-duration-minutes = 15
 ```
 
-### 认证方式
+首次启动时 `api-token`、`admin-password`、`jwt-secret` 若为空会自动生成并写回配置文件，同时以 WARN 级别打印到控制台（仅此一次），请当场记录。
 
-#### 1. API Token 认证（推荐）
+### 三类端点
 
-使用 `X-API-Key` 头或 `Authorization` 头：
+鉴权逻辑全部集中在 `ApiRouter.isAuthenticated` / `ApiRouter.isPublicEndpoint`：
+
+#### 1. 公开端点（无需任何凭据）
+
+**只有以下三个**，其余端点一律需要凭据：
+
+- `POST /api/v1/admin/login`
+- `POST /api/v1/admin/register`
+- `GET /api/v1/item-icon`（`<img>` 标签无法携带自定义请求头，故必须公开）
+
+#### 2. API 令牌端点（`X-API-Key`）
+
+除公开端点与"仅管理员 JWT"端点外，全部端点都可用 API 令牌访问：
 
 ```bash
-# 方式1：使用 X-API-Key 头
 curl -H "X-API-Key: sk-your-api-token-here" \
      -X GET http://your-server:22222/api/v1/whitelist
-
-# 方式2：使用 Authorization Bearer
-curl -H "Authorization: Bearer sk-your-api-token-here" \
-     -X GET http://your-server:22222/api/v1/whitelist
 ```
 
-#### 2. 管理员密码认证
+令牌值取自 `[api.auth] api-token`，服务端以 `MessageDigest.isEqual` 做定长比较（防时序攻击）。
 
-使用 `X-Admin-Password` 头（主要用于管理员端点）：
+> **注意**：API 令牌**不能**放进 `Authorization: Bearer` 头。该头只走 JWT 校验分支，用 `sk-` 令牌会校验失败并返回 401。
+
+#### 3. 管理员 JWT 端点（`Authorization: Bearer <jwt>`）
+
+JWT 由 `POST /api/v1/admin/login` 签发，有效期 24 小时。
 
 ```bash
-curl -H "X-Admin-Password: your-admin-password" \
-     -X POST http://your-server:22222/api/v1/admin/generate-token
+curl -H "Authorization: Bearer eyJhbGciOi..." \
+     -X GET http://your-server:22222/api/v1/admin/me
 ```
 
-### 公开端点
+- `GET /api/v1/admin/me` **只认 JWT**：该端点在路由层放行 `X-API-Key`，但控制器会自行从 `Authorization: Bearer` 或 `X-Auth-Token` 头取 JWT，只带 `X-API-Key` 会拿到 401 `未提供认证token`。
+- 携带有效 JWT 调用 `POST /api/v1/whitelist` 时，服务端会用登录管理员的显示名覆盖请求体中的 `added_by_name`，并把 `added_by_uuid` 记为 `WEBUI`（渠道标记，客户端无法伪造）。
 
-以下端点无需 API Token 认证（如果认证被禁用，所有端点都无需认证）：
-- `/api/v1/admin/login` - 管理员登录
-- `/api/v1/admin/register` - 管理员注册（需要有效的注册令牌）
+> 服务端**不存在** `X-Admin-Password` 请求头的校验逻辑，请勿使用。`[api.auth] admin-password` 仅用于初始化内置超级管理员账号。
 
-**说明：**
-- "公开端点"指的是不需要 API Token 或 JWT 认证的端点
-- `/api/v1/admin/login` 使用用户名和密码登录，返回 JWT token
-- `/api/v1/admin/register` 使用注册令牌进行管理员注册
+### 认证失败响应
 
-### 自动生成凭证
+```json
+{"success":false,"error":"Unauthorized: Invalid API key or token"}
+```
 
-插件首次启动时会自动生成：
-- **管理员密码**：12位随机字符串
-- **API令牌**：64位 sk- 开头的随机字符串
-
-生成的凭证会自动保存到配置文件中，并在控制台输出供管理员记录。
-
-### 安全建议
-
-⚠️ **重要安全提示：**
-- 请妥善保管API令牌和管理员密码
-- 定期更换API令牌，避免长期使用同一令牌
-- 在生产环境中，建议启用认证功能
-- 如果不需要认证，可以在配置文件中设置 `auth.enabled: false`
-- 确保服务器防火墙正确配置，避免未授权访问
+HTTP 状态码 401。
 
 ### 禁用认证
 
-如果您不需要API认证（如内网环境），可以在 `config.yml` 中禁用：
+把 `[api.auth] enabled` 设为 `false` 后，`isAuthenticated` 直接返回 true，所有端点无凭据可访问。仅限完全隔离的内网环境使用。
 
-```yaml
-auth:
-  enabled: false  # 禁用认证
-```
+## 所有可用端点
 
-**注意：** 禁用认证后，所有API端点都可以无限制访问，请谨慎使用。
+以下路由表逐条对应 `ApiRouter` 中的 `path.equals(...)` / `path.startsWith(...)` 分支，未列出的路径一律返回 404。
 
-## 🚀 所有可用端点
+### 白名单管理
 
-### 白名单管理 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/whitelist` | GET | 获取白名单列表（支持分页、搜索、排序） | API Token |
-| `/api/v1/whitelist` | POST | 添加白名单条目 | API Token |
-| `/api/v1/whitelist/{uuid}` | DELETE | 删除指定UUID的白名单条目 | API Token |
-| `/api/v1/whitelist/by-name/{name}/status` | PUT | 启用/禁用指定玩家的白名单访问权限 | API Token |
-| `/api/v1/whitelist/batch` | POST | 批量操作白名单条目（add/remove/enable/disable） | API Token |
-| `/api/v1/whitelist/regcode` | POST | 为指定玩家名签发一次性注册码（仅发码，不加白） | API Token |
-| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | API Token |
-| `/api/v1/whitelist/sync` | POST | 手动触发同步 | API Token |
-| `/api/v1/whitelist/sync/status` | GET | 获取同步状态 | API Token |
+| `/api/v1/whitelist` | GET | 获取白名单列表（分页、搜索、排序，含被禁用条目） | X-API-Key 或 JWT |
+| `/api/v1/whitelist` | POST | 添加白名单条目（仅需玩家名） | X-API-Key 或 JWT |
+| `/api/v1/whitelist/batch` | POST | 批量操作（add / remove / enable / disable） | X-API-Key 或 JWT |
+| `/api/v1/whitelist/regcode` | POST | 为指定玩家名签发一次性注册码（仅发码，不加白） | X-API-Key 或 JWT |
+| `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | X-API-Key 或 JWT |
+| `/api/v1/whitelist/sync` | POST | 兼容桩，JSON 同步已移除 | X-API-Key 或 JWT |
+| `/api/v1/whitelist/sync/status` | GET | 兼容桩，返回纯数据库模式标记 | X-API-Key 或 JWT |
+| `/api/v1/whitelist/by-name/{name}/status` | PUT | 启用/禁用指定玩家的白名单访问权限 | X-API-Key 或 JWT |
+| `/api/v1/whitelist/by-name/{name}` | DELETE | 按玩家名删除白名单条目 | X-API-Key 或 JWT |
+| `/api/v1/whitelist/{uuid}` | DELETE | 按 UUID 删除白名单条目 | X-API-Key 或 JWT |
 
-### 管理员认证 API
+### 管理员认证
+
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/admin/login` | POST | 管理员登录 | 无（公开） |
-| `/api/v1/admin/register` | POST | 管理员注册 | 注册令牌 |
-| `/api/v1/admin/me` | GET | 获取当前管理员信息 | JWT Token |
-| `/api/v1/admin/generate-token` | POST | 生成注册令牌 | JWT Token |
+| `/api/v1/admin/login` | POST | 管理员登录，返回 JWT | 无（公开） |
+| `/api/v1/admin/register` | POST | 管理员注册，需注册令牌 | 无（公开，令牌在请求体内校验） |
+| `/api/v1/admin/me` | GET | 获取当前管理员信息 | 仅管理员 JWT |
+| `/api/v1/admin/generate-token` | POST | 生成管理员注册令牌 | X-API-Key 或 JWT |
 
-**说明：**
-- `/api/v1/admin/login` 使用用户名和密码登录，返回 JWT token
-- `/api/v1/admin/register` 使用注册令牌进行管理员注册
-- `/api/v1/admin/me` 和 `/api/v1/admin/generate-token` 需要在请求头中提供 `Authorization: Bearer <jwt-token>`
+### 操作日志
 
-### 玩家数据查询 API
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/player` | GET | 获取玩家详细数据（使用查询参数 `?name=玩家名`） | API Token |
+| `/api/v1/logs/operations` | GET | 查询白名单操作日志 | X-API-Key 或 JWT |
+| `/api/v1/logs/operations/stats` | GET | 按操作类型统计日志条数 | X-API-Key 或 JWT |
 
-### 服务器监控 API
+### 玩家与服务器 API
+
 | 端点 | 方法 | 描述 | 认证要求 |
 |------|------|------|----------|
-| `/api/v1/server/info` | GET | 获取服务器详细信息 | API Token |
-| `/api/v1/server/status` | GET | 获取服务器状态信息 | API Token |
-| `/api/v1/server/performance` | GET | 获取服务器性能数据 | API Token |
-| `/api/v1/players/online` | GET | 获取在线玩家数量 | API Token |
-| `/api/v1/players/list` | GET | 获取详细玩家列表 | 无 |
-| `/api/v1/worlds/list` | GET | 获取世界列表 | 无 |
-| `/api/v1/system/resources` | GET | 获取系统资源信息 | 无 |
-| `/api/v1/health` | GET | 健康检查端点 | 无 |
+| `/api/v1/player` | GET | 获取单个玩家详细数据（`?name=玩家名`） | X-API-Key 或 JWT |
+| `/api/v1/server/players` | GET | 获取在线玩家列表 | X-API-Key 或 JWT |
+| `/api/v1/server/performance` | GET | 获取服务器性能数据（Spark + JVM） | X-API-Key 或 JWT |
+| `/api/v1/item-icon` | GET | 按物品 id 返回贴图 PNG（`?id=ns:path`） | 无（公开） |
 
-## 🎯 UUID自动补充机制
-
-### 设计理念
-
-基于 WhitelistPlus 插件的设计理念，我们的白名单系统采用了**"玩家名优先，UUID后补"**的策略：
-
-1. **添加阶段**：管理员只需提供玩家名即可添加白名单
-2. **登录阶段**：玩家首次登录时系统自动补充UUID  
-3. **同步阶段**：创建同步任务更新JSON文件，保持数据一致性
-
-### 工作流程
-
-```mermaid
-sequenceDiagram
-    participant Admin as 管理员
-    participant API as API接口
-    participant DB as 数据库
-    participant Player as 玩家
-    participant Listener as 登录监听器
-    participant Sync as 同步系统
-
-    Admin->>API: POST /api/v1/whitelist {"name": "PlayerName"}
-    API->>DB: INSERT (name, uuid=NULL)
-    API->>Admin: 返回成功响应
-
-    Player->>Listener: 玩家登录服务器
-    Listener->>DB: 查询玩家名对应记录
-    Listener->>DB: UPDATE uuid WHERE name=PlayerName
-    Listener->>Sync: 创建UUID更新任务
-    Listener->>Player: 发送欢迎消息
-```
-
-### 数据库状态变化
-
-**添加时：**
-```sql
-id | name       | uuid | source | is_active | uuid_pending
-1  | PlayerName | NULL | API    | 1         | true
-```
-
-**首次登录后：**
-```sql  
-id | name       | uuid                                 | source | is_active | uuid_pending
-1  | PlayerName | 550e8400-e29b-41d4-a716-446655440000 | API    | 1         | false
-```
-
-### 优势
-
-- ✅ **简化管理**：无需获取玩家UUID，直接使用玩家名
-- ✅ **兼容性强**：支持离线和正版服务器
-- ✅ **自动化**：UUID自动补充，无需人工干预
-- ✅ **数据完整性**：保证最终数据的完整性
-- ✅ **实用性**：符合大多数服务器的实际使用场景
-
-## 简化认证机制
-
-### 管理员操作
-对于白名单管理等核心功能，系统采用简化认证：
-- 管理员直接通过Web界面操作
-- 无需复杂的登录流程
-- 适合服务器管理员使用场景
-
-### 注册令牌
-用于用户自助注册白名单：
-```http
-# 生成令牌时需要管理员密码验证
-X-Admin-Password: your-admin-password
-```
+> **已不存在的端点**：`/api/v1/health`、`/api/v1/server/info`、`/api/v1/server/status`、`/api/v1/players/online`、`/api/v1/players/list`、`/api/v1/worlds/list`、`/api/v1/system/resources`、`/api/v1/register` 在当前实现中均无路由分支，请求会返回 404。在线玩家列表请改用 `/api/v1/server/players`。
 
 ## 响应格式
 
-### 成功响应
+### 控制器响应（`ApiResponse`）
+
+绝大多数端点由控制器经 `ApiResponse` 输出，Gson 默认不序列化 null，因此值为 null 的字段会**整个键缺失**，客户端应按"字段不存在"处理。
+
+成功：
 
 ```json
 {
   "success": true,
-  "data": {
-    // 具体数据内容
-  },
-  "timestamp": 1640995200000
+  "data": { },
+  "message": "成功获取在线玩家列表",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-### 错误响应
+失败：
+
+```json
+{
+  "success": false,
+  "error": "玩家不存在",
+  "code": 404,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+- `timestamp` 是 ISO-8601 本地时间字符串（`yyyy-MM-ddTHH:mm:ss[.SSS]`），**不是**毫秒数。
+- `message` 仅在控制器显式传入时才存在。
+- **`code` 字段不可靠，请以 HTTP 状态码为准**：`ApiResponse.success(...)` 恒把 `code` 置为 200（即使 HTTP 是 201/207），`ApiResponse.error(...)` 恒置为 500（即使 HTTP 是 409/429/504），只有 `badRequest` / `notFound` 的 400 / 404 与 HTTP 一致。
+
+### 路由器响应（`ApiRouter` 自身产生的错误）
+
+路径不匹配、方法不支持、handler 未就绪、以及未捕获异常这四类错误由 `ApiRouter` 直接拼串输出，结构不同：
 
 ```json
 {
   "success": false,
   "error": {
     "code": 404,
-    "message": "Not Found",
-    "details": "API路径不存在"
+    "message": "API endpoint not found"
   },
-  "timestamp": 1640995200000
+  "timestamp": 1754103540217
 }
 ```
 
-## 📋 API 端点详细说明
+此处 `error` 是对象，`timestamp` 是毫秒数。物品图标端点的错误响应也是这种结构。
 
-### 白名单管理 API
+## 白名单管理 API
 
-#### `GET /api/v1/whitelist`
+### `GET /api/v1/whitelist`
 
-获取白名单列表，支持分页、搜索和排序。
+分页获取白名单列表。该端点供后台管理界面使用，**固定返回全部条目（含 `isActive=false` 的被禁用条目）**。
 
-**请求参数：**
-- `page` (可选): 页码，默认为1
-- `size` (可选): 每页大小，默认为20
-- `search` (可选): 搜索关键词
-- `sort` (可选): 排序字段 (name, uuid, created_at)
-- `order` (可选): 排序方向 (asc, desc)
+**查询参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `page` | 页码，默认 1 |
+| `size` | 每页大小，默认 20，上限 999999 |
+| `search` | 玩家名模糊匹配（`name LIKE %值%`） |
+| `source` | 来源精确匹配，自动转大写 |
+| `added_by` | 添加者名模糊匹配（`added_by_name LIKE %值%`） |
+| `sort` | 排序字段：`name` / `uuid` / `added_by`(`added_by_name`) / `added_at` / `source` / `created_at` / `updated_at`，非法值回落到 `created_at` |
+| `order` | `asc` / `desc`，默认 `desc` |
+| `start_date` | 起始时间，作用于 `added_at >= 值` |
+| `end_date` | 结束时间，作用于 `added_at <= 值` |
 
 **响应示例：**
+
 ```json
 {
   "success": true,
   "data": {
-    "entries": [
+    "items": [
       {
         "id": 1,
-        "uuid": "550e8400-e29b-41d4-a716-446655440000",
         "name": "Player1",
-        "added_by_name": "AdminUser",
-        "added_by_uuid": "admin-uuid-here",
-        "added_at": "2024-01-01T00:00:00",
-        "source": "API",
-        "is_active": true,
-        "created_at": "2024-01-01T00:00:00",
-        "updated_at": "2024-01-01T00:00:00"
+        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+        "addedByName": "AdminUser",
+        "addedByUuid": "WEBUI",
+        "addedAt": "2026-08-01T12:00:00",
+        "source": "ADMIN",
+        "isActive": true,
+        "qq": "10001",
+        "createdAt": "2026-08-01T12:00:00",
+        "updatedAt": "2026-08-01T12:00:00"
       },
       {
         "id": 2,
-        "uuid": null,
         "name": "Player2",
-        "added_by_name": "AdminUser", 
-        "added_by_uuid": "admin-uuid-here",
-        "added_at": "2024-01-01T01:00:00",
-        "source": "API",
-        "is_active": true,
-        "created_at": "2024-01-01T01:00:00",
-        "updated_at": "2024-01-01T01:00:00",
-        "uuid_pending": true
+        "addedByName": "API",
+        "addedByUuid": "API",
+        "addedAt": "2026-08-01T13:00:00",
+        "source": "SYSTEM",
+        "isActive": true,
+        "createdAt": "2026-08-01T13:00:00",
+        "updatedAt": "2026-08-01T13:00:00"
       }
     ],
-    "pagination": {
-      "page": 1,
-      "size": 20,
-      "total": 100,
-      "total_pages": 5
-    }
+    "page": 1,
+    "size": 20,
+    "total": 100,
+    "pages": 5
   },
-  "timestamp": 1640995200000
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-> **💡 说明**：当 `uuid` 字段为 `null` 且 `uuid_pending` 为 `true` 时，表示该玩家的UUID将在首次登录时自动补充。
+> **字段命名**：响应键为 Java 字段名的驼峰形式（`addedByName` / `isActive` / `createdAt`），**不是** snake_case。
+>
+> **UUID 待补充**：如上例中的 `Player2`，`uuid` 为 null 时该键直接缺失。此列表**不包含** `uuid_pending` 字段，请以"是否存在 `uuid` 键"判断。`qq` 为 null 时同理缺失。
+>
+> **关于 `isActive`**：`false` 表示玩家仍在白名单中、但被管理员关闭了访问权限，进服时会被拒并展示 `whitelist.disabled-message`（默认"您已在白名单中，但管理员手动关闭了您的访问权限"）。可通过 `PUT .../status` 端点切换。
 
-> **💡 关于 `is_active`**：此列表用于后台管理，返回全部条目（含被禁用项）。`is_active` 为 `false` 表示该玩家仍在白名单中、但被管理员手动关闭了访问权限，进服时会被拒并提示"您已在白名单中，但管理员手动关闭了您的访问权限"。可通过下方的 `PUT .../status` 端点切换该状态。
+### `POST /api/v1/whitelist`
 
-#### `POST /api/v1/whitelist`
-
-添加新的白名单条目（基于WhitelistPlus设计理念）。
-
-> **🎯 新特性**：现在只需要玩家名即可添加白名单，UUID会在玩家首次登录时自动补充！
+添加白名单条目。只需玩家名，UUID 在玩家首次登录时自动补充。
 
 **请求体：**
+
 ```json
 {
   "name": "PlayerName",
-  "source": "API",
+  "source": "ADMIN",
   "added_by_name": "AdminName",
-  "added_by_uuid": "admin-uuid-here",
-  "added_at": "2024-01-01T12:00:00"
+  "added_by_uuid": "API",
+  "added_at": "2026-08-01T12:00:00",
+  "qq": "10001"
 }
 ```
 
 **参数说明：**
-- `name` (必需): 玩家名称
-- `source` (必需): 添加来源，可选值：`PLAYER`、`ADMIN`、`SYSTEM`、`API`
-- `added_by_name` (可选): 添加者名称，默认为 "API"
-- `added_by_uuid` (可选): 添加者UUID，默认为 "00000000-0000-0000-0000-000000000000"
-- `added_at` (可选): 添加时间，默认为当前时间（ISO格式）
 
-**最简请求示例：**
+- `name`（必需）：玩家名。控制器只校验长度 1-64；但底层 `WhitelistManager` 要求 **3-16 位 `[a-zA-Z0-9_]`**，不满足会静默返回失败 → HTTP 409。
+- `source`（必需）：来源，枚举 `WhitelistEntry.Source` 只接受 **`PLAYER`、`ADMIN`、`SYSTEM`** 三个值。传其它值（含 `API`）返回 400 `来源类型无效`。
+- `added_by_name`（可选）：添加者名，缺省 `API`。
+- `added_by_uuid`（可选）：添加者标识，兼作渠道标记，缺省 `API`。仅在提供了 `added_by_name` 时才读取此字段。
+- `added_at`（可选）：ISO-8601 本地时间，缺省当前时间；格式错误返回 400。
+- `qq`（可选）：联系 QQ，空串归一为 null。
+
+> 携带管理员 JWT 调用时，`added_by_name` / `added_by_uuid` 会被服务端强制覆盖为管理员显示名 / `WEBUI`，请求体中的同名字段被忽略。
+
+**最简请求：**
+
 ```json
-{
-  "name": "PlayerName",
-  "source": "API"
-}
+{ "name": "PlayerName", "source": "ADMIN" }
 ```
 
-**响应示例：**
+**成功响应（HTTP 201）：**
+
 ```json
 {
   "success": true,
-  "message": "玩家添加成功",
   "data": {
     "name": "PlayerName",
     "added": true,
     "uuid_pending": true,
-    "message": "玩家已添加到白名单，UUID将在首次登录时自动补充"
+    "message": "玩家已添加到白名单，UUID将在首次登录时自动补充",
+    "registration_code": "ABCD-2345",
+    "code_expires_minutes": 1440
   },
-  "timestamp": 1640995200000
+  "message": "玩家添加成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-**UUID补充机制：**
-当玩家首次登录服务器时，系统会自动：
-1. 检测到玩家UUID为空
-2. 自动更新数据库中的UUID
-3. 创建同步任务更新JSON文件
-4. 向玩家发送欢迎消息
+`registration_code` / `code_expires_minutes` 仅在玩家离线认证启用（`[auth] enabled = true`）时随回执一并签发，否则这两个键缺席。
 
-#### `DELETE /api/v1/whitelist/{uuid}`
+**错误：** 缺少 `name` 或 `source` 返回 400；玩家已在白名单中或写库失败返回 409 `玩家已在白名单中或添加失败`。
 
-删除指定UUID的白名单条目。
+### `DELETE /api/v1/whitelist/{uuid}`
+
+按 UUID 删除。`{uuid}` 必须匹配标准 36 位带连字符格式，否则 400。
 
 **响应示例：**
+
 ```json
 {
   "success": true,
   "data": {
-    "message": "白名单条目已删除",
-    "uuid": "550e8400-e29b-41d4-a716-446655440000"
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "PlayerName",
+    "removed": true
   },
-  "timestamp": 1640995200000
+  "message": "玩家移除成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-#### `PUT /api/v1/whitelist/by-name/{name}/status`
+**错误：** UUID 格式非法 400；条目不存在 404。
+
+### `DELETE /api/v1/whitelist/by-name/{name}`
+
+按玩家名删除，用于 UUID 尚未补充的条目。`{name}` 需 URL 编码，服务端会解码。若条目已有 UUID 则按 UUID 删除，否则按名删除。
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "name": "PlayerName",
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "removed": true
+  },
+  "message": "玩家移除成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+条目 UUID 为空时 `uuid` 键缺席。**错误：** 名称非法 400；条目不存在 404。
+
+### `PUT /api/v1/whitelist/by-name/{name}/status`
 
 启用/禁用指定玩家的白名单访问权限（按玩家名定位，因 UUID 待补充的条目 `uuid` 为空）。
 
-禁用（`is_active=false`）后，该玩家**仍保留在白名单中**，但进服会被拒绝并提示"您已在白名单中，但管理员手动关闭了您的访问权限"（提示文案可经服务端配置 `whitelist.disabled-message` 修改）。重新启用即恢复访问。与 `DELETE` 的区别：禁用是可逆的临时关停，不删除条目、不丢失 QQ/添加者等信息。
+禁用（`is_active=false`）后，该玩家**仍保留在白名单中**，但进服会被拒绝并展示 `whitelist.disabled-message`。重新启用即恢复访问。与 `DELETE` 的区别：禁用是可逆的临时关停，不删除条目、不丢失 QQ 与添加者信息。
 
 `{name}` 需做 URL 编码。
 
 **请求体：**
+
 ```json
-{
-  "is_active": false
-}
+{ "is_active": false }
 ```
 
-**参数说明：**
-- `is_active` (必需): `true` 启用，`false` 禁用
-
 **响应示例：**
+
 ```json
 {
   "success": true,
-  "message": "已禁用",
   "data": {
     "name": "PlayerName",
     "is_active": false
   },
-  "timestamp": 1640995200000
+  "message": "已禁用",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-**错误：** 玩家不存在返回 `404`；缺少 `is_active` 返回 `400`。
+**错误：** 玩家名非法或缺少 `is_active` 返回 400；玩家不存在返回 404。
 
-#### `POST /api/v1/whitelist/batch`
+### `POST /api/v1/whitelist/batch`
 
-批量操作白名单条目，`operation` 支持 `add`（批量添加）、`remove`（批量删除）、`enable`/`disable`（批量启用/禁用）。
+批量操作，`operation` 支持 `add`、`remove`、`enable`、`disable`（大小写不敏感）。单次最多 100 个玩家，`players` 不可为空。
 
-**批量添加请求体：**
+**批量添加：**
+
 ```json
 {
   "operation": "add",
-  "source": "API",
+  "source": "ADMIN",
   "added_by_name": "AdminName",
-  "added_by_uuid": "admin-uuid-here",
-  "added_at": "2024-01-01T12:00:00",
+  "added_by_uuid": "00000000-0000-0000-0000-000000000000",
+  "added_at": "2026-08-01T12:00:00",
   "players": [
-    {
-      "name": "Player1"
-    },
-    {
-      "name": "Player2"
-    }
+    { "name": "Player1" },
+    { "name": "Player2", "uuid": "550e8400-e29b-41d4-a716-446655440000" }
   ]
 }
 ```
 
-**批量删除请求体：**
+> **批量添加与单条添加的关键差异**：批量添加会立即为每个玩家写入 UUID —— 未提供 `uuid` 时由 `UuidUtils.getOrGenerateUuid` 按玩家名 MD5 生成确定性 UUID（version 3 形态），**不走登录补充流程**。若服务器为正版验证模式，该生成值与玩家真实 UUID 不一致。需要 UUID 自动补充语义时请逐个调用 `POST /api/v1/whitelist`。
+
+**批量删除**（按 `uuid` 定位，每个元素必须有合法 `uuid`）：
+
 ```json
 {
   "operation": "remove",
   "added_by_name": "AdminName",
-  "added_by_uuid": "admin-uuid-here",
   "players": [
-    {
-      "uuid": "550e8400-e29b-41d4-a716-446655440000"
-    },
-    {
-      "uuid": "550e8400-e29b-41d4-a716-446655440001"
-    }
+    { "uuid": "550e8400-e29b-41d4-a716-446655440000" },
+    { "uuid": "550e8400-e29b-41d4-a716-446655440001" }
   ]
 }
 ```
 
-**批量启用/禁用请求体：** 按玩家名定位，`operation` 取 `enable` 或 `disable`，无需 `source`：
+**批量启用/禁用**（按 `name` 定位，无需 `source` / `added_by_*`）：
+
 ```json
 {
   "operation": "disable",
@@ -471,630 +453,839 @@ X-Admin-Password: your-admin-password
 }
 ```
 
-> **参数说明**：`source` 仅 `add` 操作必需；`remove` 按 `uuid`、`enable`/`disable` 按 `name` 定位玩家。单次最多 100 个玩家。
+**参数说明：** `operation` 与 `players` 必需；`source` 仅 `add` 必需，取值同样限于 `PLAYER` / `ADMIN` / `SYSTEM`；`added_by_name` 缺省 `API`，`added_by_uuid` 缺省 `00000000-0000-0000-0000-000000000000`（仅 `add` / `remove` 读取）。
 
 **响应示例：**
+
 ```json
 {
   "success": true,
-  "message": "批量操作完成",
   "data": {
     "operation": "add",
     "total_requested": 2,
     "success_count": 2,
-    "failed_count": 0,
-    "details": [
-      {
-        "name": "Player1",
-        "success": true
-      },
-      {
-        "name": "Player2", 
-        "success": true
-      }
-    ]
+    "failure_count": 0,
+    "success_rate": 1.0,
+    "registration_codes_pending": true,
+    "registration_codes_hint": "批量加白未逐个签发注册码, 请在游戏内执行 /accesshub auth gencode 为未注册白名单玩家批量补发"
   },
-  "timestamp": 1640995200000
+  "message": "批量添加完成",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-#### `POST /api/v1/whitelist/regcode`
+- 全部成功 HTTP 200，部分成功 HTTP **207**，全部失败 HTTP 400。
+- `success_rate` 是 **0..1 的比例**（`success_count / total_requested`），不是百分比。
+- 存在失败项时追加 `errors` 数组（元素为服务端产生的错误描述）。
+- `registration_codes_pending` / `registration_codes_hint` 仅在玩家离线认证启用且至少成功一条时出现：批量加白**不会**逐个签发注册码。
 
-为指定玩家名签发一次性注册码，仅发码、不改动白名单。与 `POST /api/v1/whitelist`（加白即发码）解耦：当玩家已在白名单（如问卷审核时已加白）时再调加白会撞 409 拿不到码，此端点直接重签注册码，与白名单状态无关。内部会作废该玩家名名下旧的未用码，保证同名同时只有一个有效码；仅返回明文码一次，库内只存其 SHA-256 哈希。
+### `POST /api/v1/whitelist/regcode`
 
-主要供问卷后端在玩家凭 hash 自助领码时以服务端身份调用。需玩家认证（`player-auth`）启用，否则返回 409。
+为指定玩家名签发一次性注册码，仅发码、不改动白名单。与 `POST /api/v1/whitelist`（加白即发码）解耦：当玩家已在白名单（如问卷审核时已加白）时再调加白会撞 409 拿不到码，此端点直接重签注册码，与白名单状态无关。内部会作废该玩家名名下旧的未用码，保证同名同时只有一个有效码；仅返回明文码一次，库内只存其 SHA-256 哈希，明文码不写入操作日志。
+
+主要供问卷后端在玩家凭 hash 自助领码时以服务端身份调用。需玩家离线认证（`common.toml` 的 `[auth] enabled`）启用，否则返回 409。
 
 **请求体：**
+
 ```json
-{
-  "name": "PlayerName"
-}
+{ "name": "PlayerName" }
 ```
 
 **响应示例：**
+
 ```json
 {
   "success": true,
-  "message": "注册码已生成",
   "data": {
     "name": "PlayerName",
     "registration_code": "ABCD-2345",
     "code_expires_minutes": 1440
   },
-  "timestamp": 1640995200000
+  "message": "注册码已生成",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
 **说明：**
-- 注册码绑定该玩家名、一次性、`code_expires_minutes` 分钟后过期，玩家游戏内 `/register <密码> <确认> <注册码>` 使用。
-- 玩家认证未启用时返回 409 `玩家认证未启用, 无法签发注册码`。
 
-#### `GET /api/v1/whitelist/stats`
+- 注册码绑定该玩家名、一次性、`code_expires_minutes` 分钟后过期（`[auth] code-expiry-minutes`，默认 1440），玩家游戏内 `/register <密码> <确认> <注册码>` 使用。
+- 缺少 `name` 或名称非法返回 400；玩家认证未启用返回 409 `玩家认证未启用, 无法签发注册码`；生成失败返回 500。
 
-获取白名单统计信息。
+### `GET /api/v1/whitelist/stats`
 
 **响应示例：**
+
 ```json
 {
   "success": true,
   "data": {
-    "total_entries": 150,
-    "active_entries": 148,
-    "uuid_pending_entries": 12,
-    "recent_additions": 5,
-    "recent_deletions": 2,
-    "recent_uuid_updates": 3,
-    "source_breakdown": {
-      "API": 80,
-      "ADMIN": 45,
-      "SYSTEM": 20,
-      "PLAYER": 5
+    "totalPlayers": 150,
+    "activePlayers": 148,
+    "sourceCounts": {
+      "ADMIN": 120,
+      "SYSTEM": 25,
+      "PLAYER": 3
     },
-    "sync_status": "active",
-    "last_sync": "2024-01-01T00:00:00Z",
-    "cache_status": {
-      "loaded": true,
-      "size": 150,
-      "last_refresh": "2024-01-01T00:00:00Z"
+    "recentAdditions": 5,
+    "growthTrend": "stable"
+  },
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `totalPlayers` | 白名单总条目数（含被禁用） |
+| `activePlayers` | `is_active = 1` 的条目数 |
+| `sourceCounts` | 按 `source` 分组计数，**只统计 `is_active = 1` 的条目** |
+| `recentAdditions` | 最近 24 小时内 `created_at` 落入的新增数 |
+| `growthTrend` | 恒为 `"stable"`，趋势计算未实现，请勿依赖 |
+
+> 该端点**不返回** UUID 待补充数、删除数、同步状态或缓存状态，这些字段在当前实现中不存在。
+
+### `POST /api/v1/whitelist/sync`
+
+JSON 同步功能已移除，此端点保留为兼容桩，不执行任何同步动作，恒返回 HTTP 200：
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "JSON同步功能已移除,系统现在使用纯数据库模式",
+    "mode": "database-only"
+  },
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+### `GET /api/v1/whitelist/sync/status`
+
+同为兼容桩：
+
+```json
+{
+  "success": true,
+  "data": {
+    "mode": "database-only",
+    "json_sync": "disabled",
+    "message": "系统运行在纯数据库模式"
+  },
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+## 管理员认证 API
+
+### `POST /api/v1/admin/login`
+
+公开端点。用户名 + 密码换取 JWT，有效期 24 小时。
+
+**请求体：**
+
+```json
+{ "username": "admin", "password": "your-password" }
+```
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiJ9....",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "displayName": "管理员",
+      "isSuperAdmin": true,
+      "isAdmin": true
     }
   },
-  "timestamp": 1640995200000
+  "message": "登录成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-#### `POST /api/v1/whitelist/sync`
+**错误：** 缺少 `username` / `password` 或为空返回 400；凭据错误或账号被锁返回 401（消息来自认证服务）。连续失败达 `[api.auth.login-attempt-limit] max-attempts`（默认 5）后锁定 `lock-duration-minutes`（默认 15）分钟。
 
-手动触发白名单同步。
+### `POST /api/v1/admin/register`
 
-**响应示例：**
-```json
-{
-  "success": true,
-  "message": "同步任务已创建",
-  "data": {
-    "task_id": 12345,
-    "task_type": "FULL_SYNC",
-    "status": "PENDING",
-    "created_at": "2024-01-01T00:00:00Z"
-  },
-  "timestamp": 1640995200000
-}
-```
-
-#### `GET /api/v1/whitelist/sync/status`
-
-获取同步状态信息。
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "sync_enabled": true,
-    "last_sync_time": "2024-01-01T00:00:00Z",
-    "sync_status": "completed",
-    "pending_tasks": 2,
-    "recent_tasks": [
-      {
-        "id": 12345,
-        "type": "FULL_SYNC",
-        "status": "COMPLETED",
-        "created_at": "2024-01-01T00:00:00Z",
-        "completed_at": "2024-01-01T00:00:05Z"
-      },
-      {
-        "id": 12346,
-        "type": "UPDATE_UUID",
-        "status": "PROCESSING",
-        "created_at": "2024-01-01T00:05:00Z"
-      }
-    ]
-  },
-  "timestamp": 1640995200000
-}
-```
-
-### 令牌管理 API
-
-#### `POST /api/v1/admin/generate-token`
-
-生成注册令牌(需要管理员JWT认证)。
-
-**请求头：**
-```http
-Authorization: Bearer <jwt-token>
-```
+公开端点，但请求体内必须携带有效的注册令牌（由 `POST /api/v1/admin/generate-token` 生成）。
 
 **请求体：**
+
 ```json
 {
-  "expiryHours": 24
-}
-```
-
-**响应示例：**
-```json
-{
-  "success": true,
-  "data": {
-    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
-    "expiryHours": 24,
-    "message": "令牌生成成功"
-  },
-  "message": "令牌生成成功",
-  "timestamp": 1640995200000
-}
-```
-
-### 用户注册 API
-
-#### `POST /api/v1/register`
-
-用户自助注册白名单。
-
-**用途说明**：
-- 这是一个让用户**自助添加到白名单**的功能
-- 用户需要从管理员处获取注册令牌（鉴权码）
-- 用户使用 **玩家名称（账号）** + **UUID（密码）** + **注册令牌（鉴权码）** 来注册
-- 注册成功后,用户的玩家名称和UUID将被添加到服务器白名单
-
-**请求体：**
-```json
-{
-  "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
-  "playerName": "PlayerName",
-  "playerUuid": "550e8400-e29b-41d4-a716-446655440000"
+  "username": "newadmin",
+  "password": "your-password",
+  "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "displayName": "新管理员"
 }
 ```
 
 **参数说明：**
-- `token` (必需): 注册令牌，由管理员生成的鉴权码
-- `playerName` (必需): 玩家的 Minecraft 游戏名称（账号）
-- `playerUuid` (必需): 玩家的 Minecraft UUID（密码）
+
+- `username`（必需）：`^[a-zA-Z0-9_]{3,20}$`
+- `password`（必需）：长度 6-50
+- `token`（必需）：注册令牌，`reg_` 前缀，一次性
+- `displayName`（可选）：缺省等于 `username`
 
 **响应示例：**
+
 ```json
 {
   "success": true,
-  "message": "注册成功",
   "data": {
-    "playerName": "PlayerName",
-    "playerUuid": "550e8400-e29b-41d4-a716-446655440000",
-    "message": "注册成功，已添加到白名单"
+    "username": "newadmin",
+    "message": "注册成功"
   },
-  "timestamp": 1640995200000
+  "message": "注册成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-**响应示例（提供UUID）：**
+**错误：** 参数缺失/格式不合规/令牌无效/用户名已存在均返回 400。
+
+### `GET /api/v1/admin/me`
+
+**仅接受管理员 JWT**，从 `Authorization: Bearer <jwt>` 或 `X-Auth-Token: <jwt>` 头读取。
+
+**响应示例：**
+
 ```json
 {
   "success": true,
-  "message": "注册成功",
   "data": {
-    "playerName": "PlayerName",
-    "playerUuid": "550e8400-e29b-41d4-a716-446655440000",
-    "uuid_pending": false,
-    "message": "注册成功，已添加到白名单"
+    "id": 1,
+    "username": "admin",
+    "displayName": "管理员",
+    "email": "admin@example.com",
+    "isSuperAdmin": true,
+    "isAdmin": true
   },
-  "timestamp": 1640995200000
+  "message": "获取成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-### 玩家数据查询 API
+`email` 为 null 时该键缺席。**错误：** 未提供 token 返回 401 `未提供认证token`；token 无效或过期返回 401 `认证失败或token已过期`。
 
-#### `GET /api/v1/player`
+### `POST /api/v1/admin/generate-token`
 
-获取指定玩家的详细数据，包括基本信息、位置、生命值、背包、装备等完整信息。
+生成管理员注册令牌。路由层鉴权，`X-API-Key` 与管理员 JWT 均可通过。
+
+**请求体（可选，可为空体）：**
+
+```json
+{ "expiryHours": 24 }
+```
+
+`expiryHours` 缺省 24，取值须在 1-168 之间，越界返回 400。请求体解析失败时回落到默认值。
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "expiryHours": 24,
+    "message": "令牌生成成功"
+  },
+  "message": "令牌生成成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+令牌形如 `reg_` + 28 位 URL-safe Base64 字符，总长 32。该令牌用于 `POST /api/v1/admin/register`。
+
+## 操作日志 API
+
+### `GET /api/v1/logs/operations`
 
 **查询参数：**
-- `name` (string, 必需): 玩家名称
-- `includeOffline` (boolean, 可选): 是否查询离线玩家，默认为 `false`。设置为 `true` 可以查询离线玩家的基本信息
+
+| 参数 | 说明 |
+|------|------|
+| `type` | 操作类型精确匹配 |
+| `target_uuid` | 目标玩家 UUID |
+| `target_name` | 目标玩家名 |
+| `operator_ip` | 操作者 IP |
+| `start_time` | 起始时间，ISO-8601 `yyyy-MM-ddTHH:mm:ss`，格式错误返回 400 |
+| `end_time` | 结束时间，同上 |
+| `limit` | 返回条数，默认 100，上限 1000，非法值回落 100 |
+| `offset` | 偏移量，默认 0，负数归零 |
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "logs": [
+      {
+        "id": 1,
+        "operation_type": "ADD",
+        "target_uuid": "550e8400-e29b-41d4-a716-446655440000",
+        "target_name": "PlayerName",
+        "operator_ip": "127.0.0.1",
+        "operator_agent": "curl/8.4.0",
+        "request_data": "{\"name\":\"PlayerName\",\"source\":\"ADMIN\"}",
+        "response_status": 201,
+        "execution_time": 12,
+        "created_at": "2026-08-02T08:59:00"
+      }
+    ],
+    "total": 1,
+    "limit": 100,
+    "offset": 0,
+    "has_more": false
+  },
+  "message": "查询成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+> 当前实际写入日志的操作类型只有 4 种，全部来自白名单端点：`ADD`、`REMOVE`、`SET_ACTIVE`、`GENCODE`。`execution_time` 单位为毫秒；`operator_ip` 优先取 `X-Forwarded-For` 首段，其次 `X-Real-IP`，最后连接远端地址。
+
+### `GET /api/v1/logs/operations/stats`
+
+**查询参数：** `start_time`、`end_time`（同上，格式错误返回 400）。
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "add": 120,
+    "remove": 8,
+    "batch_add": 0,
+    "batch_remove": 0,
+    "update": 0,
+    "total": 131
+  },
+  "message": "统计成功",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+> 该端点按硬编码的 `ADD` / `REMOVE` / `BATCH_ADD` / `BATCH_REMOVE` / `UPDATE` 五类分别计数。由于当前无处写入 `BATCH_*` / `UPDATE`，这三项恒为 0；而实际存在的 `SET_ACTIVE` 与 `GENCODE` 不出现在分项里，只计入 `total`，因此**分项之和通常小于 `total`**。
+
+## 玩家数据查询 API
+
+### `GET /api/v1/player`
+
+获取单个玩家的详细数据。在线玩家读取实时状态，离线玩家直接解析 `playerdata/<uuid>.dat` 的压缩 NBT。
+
+**查询参数：**
+
+- `name`（必需）：玩家名，为空返回 400
+- `includeOffline`（可选）：`true` 时允许查询离线玩家，默认 `false`
 
 **请求示例：**
+
 ```bash
-# 查询在线玩家
 curl -H "X-API-Key: sk-your-api-token-here" \
      -X GET "http://your-server:22222/api/v1/player?name=PlayerName"
 
-# 查询离线玩家
 curl -H "X-API-Key: sk-your-api-token-here" \
      -X GET "http://your-server:22222/api/v1/player?name=PlayerName&includeOffline=true"
 ```
 
 **响应示例（在线玩家）：**
+
 ```json
 {
   "success": true,
   "data": {
     "playerName": "PlayerName",
     "uuid": "550e8400-e29b-41d4-a716-446655440000",
-    "isOnline": true,
-    "hasPlayedBefore": true,
-    "firstPlayed": 1640995200000,
-    "lastPlayed": 1640995200000,
-    "lastLogin": 1640995200000,
-    "gameMode": "SURVIVAL",
+    "online": true,
+    "gameMode": "survival",
+    "ping": 62,
     "location": {
-      "world": "world",
-      "x": 123.45,
-      "y": 64.0,
-      "z": -67.89,
+      "dimension": "minecraft:overworld",
+      "x": -4626.93,
+      "y": 71.59,
+      "z": 20.71,
       "yaw": 90.0,
-      "pitch": 0.0,
-      "dimension": "NORMAL"
+      "pitch": 0.0
     },
-    "bedSpawnLocation": {
-      "world": "world",
-      "x": 100.0,
-      "y": 65.0,
-      "z": -50.0
+    "vitals": {
+      "health": 20.0,
+      "maxHealth": 20.0,
+      "armor": 15,
+      "foodLevel": 20,
+      "saturation": 5.0,
+      "exhaustion": 0.0,
+      "level": 30,
+      "exp": 0.5,
+      "totalExperience": 825,
+      "remainingAir": 300,
+      "maximumAir": 300,
+      "fireTicks": 0
     },
-    "health": 20.0,
-    "maxHealth": 20.0,
-    "foodLevel": 20,
-    "saturation": 5.0,
-    "exhaustion": 0.0,
-    "level": 30,
-    "exp": 0.5,
-    "totalExperience": 825,
-    "remainingAir": 300,
-    "maximumAir": 300,
-    "fireTicks": 0,
-    "isFlying": false,
-    "allowFlight": false,
-    "isInvulnerable": false,
-    "isSneaking": false,
-    "isSprinting": false,
-    "isSwimming": false,
-    "isGliding": false,
-    "isBlocking": false,
-    "walkSpeed": 0.2,
-    "flySpeed": 0.1,
+    "state": {
+      "flying": false,
+      "allowFlight": false,
+      "invulnerable": false,
+      "walkSpeed": 0.1,
+      "flySpeed": 0.05,
+      "sneaking": false,
+      "sprinting": false,
+      "swimming": false,
+      "gliding": false
+    },
     "potionEffects": [
       {
-        "type": "SPEED",
+        "type": "minecraft:speed",
         "amplifier": 1,
         "duration": 600,
-        "isAmbient": false,
-        "hasParticles": true,
-        "hasIcon": true
+        "ambient": false,
+        "visible": true,
+        "showIcon": true
       }
     ],
     "inventory": {
-      "mainInventory": [
+      "main": [
         {
-          "type": "DIAMOND_SWORD",
+          "type": "minecraft:diamond_sword",
           "amount": 1,
+          "slot": "0",
           "damage": 0,
           "maxDurability": 1561,
-          "slot": "0",
-          "displayName": "§6传奇之剑",
+          "displayName": "传奇之剑",
           "enchantments": {
-            "sharpness": 5,
-            "unbreaking": 3
+            "minecraft:sharpness": 5,
+            "minecraft:unbreaking": 3
           }
         }
       ],
       "armor": [
         {
-          "type": "DIAMOND_HELMET",
+          "type": "minecraft:diamond_helmet",
           "amount": 1,
+          "slot": "head",
           "damage": 10,
           "maxDurability": 363,
-          "slot": "head",
-          "enchantments": {
-            "protection": 4
-          }
+          "enchantments": { "minecraft:protection": 4 }
         }
       ],
-      "mainHand": {
-        "type": "DIAMOND_PICKAXE",
-        "amount": 1,
-        "damage": 50,
-        "maxDurability": 1561,
-        "enchantments": {
-          "efficiency": 5,
-          "fortune": 3
-        }
-      },
       "offHand": {
-        "type": "TORCH",
-        "amount": 64
+        "type": "minecraft:torch",
+        "amount": 64,
+        "slot": "offhand"
       }
     },
     "enderChest": [
-      {
-        "type": "DIAMOND",
-        "amount": 64,
-        "slot": "0"
-      }
-    ],
-    "statistics": {
-      "playTime": 360000,
-      "deaths": 5,
-      "mobKills": 1234,
-      "playerKills": 10,
-      "timeSinceRest": 72000,
-      "damageTaken": 150.5,
-      "damageDealt": 5234.5
-    }
+      { "type": "minecraft:diamond", "amount": 64, "slot": "0" }
+    ]
   },
-  "message": "成功获取玩家数据（在线）",
-  "timestamp": "2025-10-02T12:00:00"
+  "message": "成功获取玩家数据(在线)",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-**响应示例（离线玩家）：**
+**响应示例（离线玩家，`includeOffline=true`）：**
+
 ```json
 {
   "success": true,
   "data": {
     "playerName": "PlayerName",
     "uuid": "550e8400-e29b-41d4-a716-446655440000",
-    "isOnline": false,
-    "hasPlayedBefore": true,
-    "firstPlayed": 1640995200000,
-    "lastPlayed": 1640995200000,
-    "lastLogin": 1640995200000,
-    "gameMode": "UNKNOWN",
-    "bedSpawnLocation": {
-      "world": "world",
-      "x": 100.0,
-      "y": 65.0,
-      "z": -50.0
-    }
+    "online": false,
+    "source": "offline-nbt",
+    "lastSaved": "2026-08-01T20:13:44.512Z",
+    "gameMode": "survival",
+    "location": {
+      "dimension": "minecraft:overworld",
+      "x": -4626.93,
+      "y": 71.59,
+      "z": 20.71,
+      "yaw": 90.0,
+      "pitch": 0.0
+    },
+    "vitals": {
+      "health": 20.0,
+      "foodLevel": 20,
+      "saturation": 5.0,
+      "exhaustion": 0.0,
+      "level": 30,
+      "exp": 0.5,
+      "totalExperience": 825,
+      "remainingAir": 300,
+      "fireTicks": 0
+    },
+    "state": {
+      "flying": false,
+      "allowFlight": false,
+      "invulnerable": false,
+      "walkSpeed": 0.1,
+      "flySpeed": 0.05
+    },
+    "potionEffects": [],
+    "inventory": { "main": [], "armor": [] },
+    "enderChest": []
   },
-  "message": "成功获取玩家数据（离线）",
-  "timestamp": "2025-10-02T12:00:00"
+  "message": "成功获取玩家数据(离线)",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-**错误响应示例：**
-```json
-{
-  "success": false,
-  "error": "玩家不在线 (提示: 使用 ?includeOffline=true 查询离线玩家)",
-  "code": 404,
-  "timestamp": "2025-10-02T12:00:00"
-}
-```
+**在线与离线的结构差异：**
 
-```json
-{
-  "success": false,
-  "error": "玩家不存在或从未登录过服务器",
-  "code": 404,
-  "timestamp": "2025-10-02T12:00:00"
-}
-```
+| 差异点 | 说明 |
+|--------|------|
+| `source` / `lastSaved` | 仅离线有；`lastSaved` 为 `.dat` 文件修改时间（ISO-8601 UTC 瞬时） |
+| `ping` | 仅在线有 |
+| `vitals.maxHealth` / `vitals.armor` / `vitals.maximumAir` | 仅在线有。离线 NBT 无法可靠还原属性修饰符，故刻意省略而不给假值 |
+| `state.sneaking` / `sprinting` / `swimming` / `gliding` | 仅在线有，这些是运行期瞬时状态，不落盘 |
 
-```json
-{
-  "success": false,
-  "error": "服务器繁忙,请稍后重试(TPS过低)",
-  "code": 504,
-  "timestamp": "2025-10-02T12:00:00"
-}
-```
-
-```json
-{
-  "success": false,
-  "error": "查询请求过多,请稍后再试",
-  "code": 429,
-  "timestamp": "2025-10-02T12:00:00"
-}
-```
-
-**数据字段说明：**
+**字段说明：**
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `playerName` | string | 玩家名称 |
-| `uuid` | string | 玩家UUID |
-| `isOnline` | boolean | 是否在线 |
-| `hasPlayedBefore` | boolean | 是否曾经登录过 |
-| `firstPlayed` | long | 首次登录时间戳（毫秒） |
-| `lastPlayed` | long | 最后登录时间戳（毫秒） |
-| `lastLogin` | long | 最后登录时间戳（毫秒） |
-| `gameMode` | string | 游戏模式 (SURVIVAL/CREATIVE/ADVENTURE/SPECTATOR/UNKNOWN) |
-| `location` | object | 当前位置信息（仅在线） |
-| `location.world` | string | 世界名称 |
+| `playerName` | string | 玩家名 |
+| `uuid` | string | 玩家 UUID |
+| `online` | boolean | 是否在线（**字段名为 `online`，不是 `isOnline`**） |
+| `gameMode` | string | 游戏模式，小写：`survival` / `creative` / `adventure` / `spectator` |
+| `ping` | int | 延迟毫秒（仅在线） |
+| `location.dimension` | string | 维度注册名，如 `minecraft:overworld`（**不是** `NORMAL`/`NETHER`） |
 | `location.x/y/z` | double | 坐标 |
-| `location.yaw/pitch` | float | 视角方向 |
-| `location.dimension` | string | 维度 (NORMAL/NETHER/THE_END) |
-| `bedSpawnLocation` | object | 重生点位置 |
-| `health` | double | 当前生命值（仅在线） |
-| `maxHealth` | double | 最大生命值（仅在线） |
-| `foodLevel` | int | 饥饿值（仅在线） |
-| `saturation` | float | 饱和度（仅在线） |
-| `level` | int | 经验等级（仅在线） |
-| `exp` | float | 当前等级经验进度（仅在线） |
-| `totalExperience` | int | 总经验值（仅在线） |
-| `remainingAir` | int | 剩余空气值（仅在线） |
-| `fireTicks` | int | 火焰剩余时间（仅在线） |
-| `isFlying` | boolean | 是否正在飞行（仅在线） |
-| `allowFlight` | boolean | 是否允许飞行（仅在线） |
-| `walkSpeed` | float | 行走速度（仅在线） |
-| `flySpeed` | float | 飞行速度（仅在线） |
-| `potionEffects` | array | 药水效果列表（仅在线） |
-| `inventory` | object | 背包信息（仅在线） |
-| `inventory.mainInventory` | array | 主背包物品 |
-| `inventory.armor` | array | 装备栏物品 |
-| `inventory.mainHand` | object | 主手物品 |
-| `inventory.offHand` | object | 副手物品 |
-| `enderChest` | array | 末影箱物品（仅在线） |
-| `statistics` | object | 游戏统计数据（仅在线） |
-| `statistics.playTime` | long | 游戏时长（秒） |
-| `statistics.deaths` | int | 死亡次数 |
-| `statistics.mobKills` | int | 生物击杀数 |
-| `statistics.playerKills` | int | 玩家击杀数 |
+| `location.yaw/pitch` | float | 视角 |
+| `vitals.*` | - | 生命/饱食/经验/空气/燃烧等数值 |
+| `state.*` | - | 飞行能力与运动状态 |
+| `potionEffects[].type` | string | 效果注册名，如 `minecraft:speed` |
+| `inventory.main` | array | 主背包 36 格（含快捷栏），`slot` 为 `"0"`-`"35"` |
+| `inventory.armor` | array | 盔甲栏，`slot` 取 `feet` / `legs` / `chest` / `head` |
+| `inventory.offHand` | object | 副手物品，`slot` 为 `offhand`；副手为空时该键缺席 |
+| `enderChest` | array | 末影箱物品 |
+| 物品 `type` | string | 物品注册名，如 `minecraft:diamond_sword` |
+| 物品 `damage` / `maxDurability` | int | 仅可损耗物品才有 |
+| 物品 `displayName` | string | 仅设置了自定义名称才有 |
+| 物品 `enchantments` | object | 附魔注册名 → 等级，无附魔时该键缺席 |
 
-**使用场景：**
-- 查看玩家当前状态和位置
-- 监控玩家背包和装备
-- 分析玩家游戏数据
-- 开发自定义管理工具
-- 生成玩家数据报告
+> 空槽位不会出现在数组中；`inventory` 的 `main` / `armor` 是压缩后的稀疏列表，需靠 `slot` 定位。
+
+**错误响应：**
+
+```json
+{
+  "success": false,
+  "error": "玩家不在线 (提示: 加 ?includeOffline=true 查询离线玩家基本信息)",
+  "code": 404,
+  "timestamp": "2026-08-02T08:59:00.217"
+}
+```
+
+| HTTP | 场景 |
+|------|------|
+| 400 | 缺少 `name` 参数 |
+| 404 | 玩家不在线且未加 `includeOffline`；或玩家不存在 / 从未登录过服务器 |
+| 429 | `查询请求过多, 请稍后再试`（并发闸门满） |
+| 500 | 采集异常，或 `.dat` 文件损坏 |
+| 504 | `服务器繁忙, 请稍后重试`（主线程任务超时） |
 
 **注意事项：**
-- 离线玩家只能获取有限的基本信息（需要设置 `includeOffline=true`）
-- 在线玩家可以获取完整的实时数据
-- 需要 API Token 认证才能访问
-- 玩家名称区分大小写
-- 查询在线玩家超时时间为 3 秒，离线玩家为 5 秒
-- 系统限制最多 5 个并发查询，超过限制将返回 429 错误
-- 如果服务器 TPS 过低可能返回 504 超时错误
 
-### 服务器监控 API
+- 数据采集必须在服务器主线程执行，在线查询超时 3 秒、`includeOffline=true` 时 5 秒，超时返回 504。
+- 并发上限 5（`Semaphore`），获取许可等待 100 毫秒，抢不到返回 429。
+- 玩家名区分大小写（在线查找走 `getPlayerByName`，离线走 `GameProfileCache`）。
+- v1 Bukkit 版的 `statistics`（游戏时长/死亡数/击杀数/伤害）**未移植**，当前实现不返回该字段。
 
-#### `GET /api/v1/server/status`
+## 服务器监控 API
 
-获取服务器状态信息。
+### `GET /api/v1/server/players`
+
+获取在线玩家列表（主线程采集，3 秒超时）。
 
 **响应示例：**
+
 ```json
 {
   "success": true,
   "data": {
-    "online": true,
-    "spark_available": true,
-    "plugin_version": "0.5.0",
-    "timestamp": 1640995200000
+    "count": 1,
+    "maxPlayers": 114514,
+    "players": [
+      {
+        "name": "xinglongge",
+        "uuid": "ccbbc496-0000-0000-0000-000000000000",
+        "dimension": "minecraft:overworld",
+        "x": -4626.93,
+        "y": 71.59,
+        "z": 20.71,
+        "health": 20,
+        "ping": 62,
+        "gameMode": "creative"
+      }
+    ]
   },
-  "timestamp": 1640995200000
+  "message": "成功获取在线玩家列表",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-#### `GET /api/v1/server/performance`
+**错误：** 主线程繁忙超时返回 504 `获取在线玩家超时`；采集异常返回 500。
 
-获取服务器性能数据。
+### `GET /api/v1/server/performance`
 
-**响应示例：**
+获取服务器性能数据。TPS / MSPT / CPU 来自 spark mod，内存 / GC / 线程始终来自 JVM MXBean。异步采集，5 秒超时。
+
+**响应示例（spark 已加载，取自 Forge 1.20.1-47.4.0 生产实例）：**
+
 ```json
 {
   "success": true,
   "data": {
+    "source": "spark",
     "tps": {
-      "values": {
-        "last_1m": 20.0,
-        "last_5m": 19.8,
-        "last_15m": 19.5
-      }
+      "available": true,
+      "values": { "last_10s": 19.9998, "last_1m": 19.99996, "last_5m": 19.999998 },
+      "server_load_percent": 0.000167
     },
     "mspt": {
+      "available": true,
       "values": {
-        "last_1m": 15.2,
-        "last_5m": 16.1,
-        "last_15m": 17.3
+        "last_1m": { "mean": 0.8959, "max": 1.7136, "min": 0.6275, "percentile_95": 1.2496 },
+        "last_5m": { "mean": 0.9233, "max": 52.691, "min": 0.6226, "percentile_95": 1.3215 }
       }
     },
-    "memory": {
-      "used": 2048,
-      "max": 4096,
-      "free": 2048
-    },
     "cpu": {
-      "process": 25.5,
-      "system": 45.2
+      "available": true,
+      "system":  { "last_10s": 0.00157, "last_1m": 0.00202, "last_15m": 0.00328 },
+      "process": { "last_10s": 0.00613, "last_1m": 0.0063, "last_15m": 0.00768 }
     },
-    "timestamp": 1640995200000
+    "memory": {
+      "heap": {
+        "init": 25769803776,
+        "used": 6215958528,
+        "committed": 25769803776,
+        "max": 25769803776,
+        "usage_percent": 24.12
+      },
+      "non_heap": {
+        "init": 12582912,
+        "used": 405129080,
+        "committed": 451280896,
+        "max": 2147483648
+      },
+      "pools": {
+        "zgc_old_generation": {
+          "used": 3183476736,
+          "committed": 3183476736,
+          "max": 25769803776,
+          "type": "HEAP"
+        }
+      },
+      "source": "jvm"
+    },
+    "gc": {
+      "collectors": {
+        "zgc_cycles": { "collection_count": 42, "collection_time": 1180 }
+      },
+      "total_collections": 42,
+      "total_time_ms": 1180,
+      "average_time_per_collection": 28.09,
+      "source": "jvm"
+    },
+    "threads": {
+      "current_thread_count": 128,
+      "daemon_thread_count": 96,
+      "peak_thread_count": 141,
+      "total_started_thread_count": 3120,
+      "deadlocked_threads": 0,
+      "source": "jvm"
+    },
+    "sparkAvailable": true
   },
-  "timestamp": 1640995200000
+  "message": "成功获取服务器性能数据",
+  "code": 200,
+  "timestamp": "2026-08-02T08:59:00.217"
 }
 ```
 
-#### `GET /api/v1/health`
+**字段说明：**
 
-简单的健康检查端点。
+| 字段 | 说明 |
+|------|------|
+| `source` | `"spark"` 或 `"fallback"`，标明数据来源 |
+| `sparkAvailable` | 由 handler 附加，等价于"spark mod 已加载且 API 可用" |
+| `tps.values` | 窗口固定为 **`last_10s` / `last_1m` / `last_5m`**（spark `StatisticWindow.TicksPerSecond` 的 `SECONDS_10` / `MINUTES_1` / `MINUTES_5`），**没有 `last_15m`** |
+| `tps.server_load_percent` | 按 `(20 - last_1m) / 20 * 100` 计算的负载百分比 |
+| `mspt.values` | 窗口为 `last_1m` / `last_5m`，每个窗口是含 `mean` / `max` / `min` / `percentile_95` 的对象，单位毫秒 |
+| `cpu.system` / `cpu.process` | 窗口为 `last_10s` / `last_1m` / `last_15m`。**值是 0..1 的比例，不是百分比**（`0.00613` 即 0.613%） |
+| `memory.heap` / `memory.non_heap` | 字节数；`usage_percent` 仅堆有，是百分比 |
+| `memory.pools` | 键为内存池名（空格转下划线并转小写，如 `zgc_old_generation`），`type` 为 `HEAP` / `NON_HEAP` |
+| `gc.collectors` | 键为 GC 名（同样小写化），`collection_time` 与 `total_time_ms` 单位毫秒 |
+| `threads` | JVM 线程计数与死锁线程数 |
 
-**响应示例：**
+**spark 不可用时的降级结构：** `source` 变为 `"fallback"`，`sparkAvailable` 为 `false`，且：
+
+- `tps`：三个窗口取同一个估算值（由 `MinecraftServer.getAverageTickTime()` 推算 `min(20, 1000/mspt)`），附加 `note` 字段说明来源。
+- `mspt`：仅 `values.last_1m.mean` 一个数值，附加 `note` 字段。
+- `cpu`：`available` 为 `false`，无 `system` / `process`，附加 `note: "CPU 详细数据需安装 spark mod"`。
+- `memory` / `gc` / `threads`：与 spark 可用时完全一致。
+
+此外，spark 可用但某项统计取数抛异常时，对应子对象退化为 `{"available": false, "error": "<异常信息>"}`，客户端应先判 `available` 再读 `values`。
+
+**错误：** 采集超时返回 504 `获取性能数据超时`；异常返回 500。
+
+## 物品图标 API
+
+### `GET /api/v1/item-icon`
+
+公开端点（`<img>` 标签无法携带自定义头，故不鉴权）。从已加载的 mod jar 中抽取物品贴图 PNG。
+
+**查询参数：**
+
+- `id`（必需）：物品 id，形如 `minecraft:diamond_sword`。无冒号时首个 `/` 会被当作命名空间分隔符（`minecraft/diamond_sword` 等价）；无命名空间时默认 `minecraft`。字符白名单为 `[a-z0-9_.:/-]`，含 `..` 或越界字符返回 400。
+
+**成功响应：** HTTP 200，`Content-Type: image/png`，`Cache-Control: public, max-age=86400`，响应体为 PNG 字节。
+
+**解析顺序（best-effort）：**
+
+1. `assets/<ns>/models/item/<path>.json` 的 `textures.layer0` 指向的贴图
+2. 回退 `assets/<ns>/textures/item/<path>.png`
+3. 回退 `assets/<ns>/textures/block/<path>.png`
+4. 都没有则 404（前端应显示占位图）
+
+**错误响应**（`ApiRouter` 风格的对象型 error）：
+
 ```json
 {
-  "success": true,
-  "data": {
-    "status": "healthy",
-    "uptime": 1640995200000,
-    "version": "0.5.0",
-    "components": {
-      "cache": "healthy",
-      "data_collector": "healthy"
-    },
-    "timestamp": 1640995200000
-  }
+  "success": false,
+  "error": { "code": 404, "message": "未找到物品图标: minecraft:not_exist" },
+  "timestamp": 1754103540217
 }
 ```
+
+命中结果与未命中结果都会按 id 缓存在内存中，避免重复扫描 jar。
+
+## UUID 自动补充机制
+
+### 设计理念
+
+白名单采用**"玩家名优先，UUID 后补"**策略：
+
+1. **添加阶段**：管理员只需提供玩家名即可加白，数据库中 `uuid` 列为 NULL
+2. **登录阶段**：玩家首次登录时，`PlayerLoginListener` 调用 `WhitelistManager.updatePlayerUuid` 自动补齐 UUID
+3. **持久化**：系统运行在纯数据库模式，无 JSON 文件同步环节
+
+### 工作流程
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant API as API接口
+    participant DB as 数据库
+    participant Player as 玩家
+    participant Listener as 登录监听器
+
+    Admin->>API: POST /api/v1/whitelist {"name": "PlayerName", "source": "ADMIN"}
+    API->>DB: INSERT (name, uuid=NULL)
+    API->>Admin: 201 {"added": true, "uuid_pending": true}
+
+    Player->>Listener: 玩家登录服务器
+    Listener->>DB: 按玩家名查白名单
+    Listener->>DB: UPDATE uuid WHERE name = PlayerName
+    Listener->>Player: 放行并发送欢迎消息
+```
+
+### 数据库状态变化
+
+**添加时：**
+
+```
+id | name       | uuid | source | is_active
+1  | PlayerName | NULL | ADMIN  | 1
+```
+
+**首次登录后：**
+
+```
+id | name       | uuid                                 | source | is_active
+1  | PlayerName | 550e8400-e29b-41d4-a716-446655440000 | ADMIN  | 1
+```
+
+### 适用范围
+
+- 仅 `POST /api/v1/whitelist`（单条添加）走此流程。
+- `POST /api/v1/whitelist/batch` 的 `add` 操作**立即写入生成的 UUID**，不走登录补充，详见批量端点说明。
+
 ## 错误代码说明
 
-| 错误代码 | 说明 | 解决方案 |
-|----------|------|----------|
-| 400 | 请求参数错误 | 检查请求参数格式和必填字段 |
-| 401 | 认证失败 | 检查API Key或JWT Token是否正确 |
-| 403 | 权限不足 | 确认用户具有相应操作权限 |
-| 404 | 资源不存在 | 检查请求的UUID或路径是否正确 |
-| 409 | 资源冲突 | 白名单条目已存在或操作冲突 |
-| 429 | 请求频率超限 | 降低请求频率，等待限制解除 |
-| 500 | 服务器内部错误 | 联系管理员检查服务器状态 |
+| HTTP 状态码 | 说明 | 常见来源 |
+|------------|------|----------|
+| 200 | 成功 | - |
+| 201 | 创建成功 | `POST /api/v1/whitelist` |
+| 207 | 批量操作部分成功 | `POST /api/v1/whitelist/batch` |
+| 400 | 请求参数错误 | 缺少必需字段、格式非法、来源类型无效 |
+| 401 | 认证失败 | 缺少/错误的 `X-API-Key` 或 JWT；管理员登录凭据错误 |
+| 404 | 资源不存在 | 玩家条目不存在、玩家不在线、路径无对应路由 |
+| 405 | 方法不支持 | 对已存在路径使用了未实现的方法 |
+| 409 | 冲突 | 玩家已在白名单；玩家认证未启用而请求发码 |
+| 429 | 并发超限 | `/api/v1/player` 并发查询超过 5 个 |
+| 500 | 服务器内部错误 | 未捕获异常、数据库故障 |
+| 503 | 依赖组件未就绪 | 对应 handler 尚未初始化（服务器启动早期） |
+| 504 | 主线程/采集超时 | `/api/v1/player`、`/api/v1/server/*` |
+
+> 再次提醒：响应体中的 `code` 字段与 HTTP 状态码可能不一致，请以 HTTP 状态码为准。
 
 ## 安全最佳实践
 
-### 1. API Key 管理
-- 定期轮换API Key
-- 不要在客户端代码中硬编码API Key
-- 使用环境变量存储敏感信息
-- 监控API Key使用情况
+### API 令牌管理
 
-### 2. JWT Token 安全
-- Token具有过期时间，需要定期刷新
-- 在安全的地方存储Token
-- 登出时及时清理Token
-- 避免在URL中传递Token
+- 令牌明文存放在服务端 `common.toml`，请限制该文件的读取权限
+- 不要在前端代码里硬编码令牌；浏览器侧应走管理员 JWT
+- 轮换令牌：修改 `[api.auth] api-token` 后重启服务端；置空则下次启动自动重新生成
 
-### 3. 网络安全
-- 使用HTTPS加密传输
-- 配置适当的CORS策略
-- 实施IP白名单（如需要）
-- 监控异常访问模式
+### JWT 安全
+
+- 有效期 24 小时，过期后需重新登录
+- 修改 `[api.auth] jwt-secret` 会立即使所有已签发 token 失效，可作为紧急吊销手段
+- 避免在 URL 中传递 token
+
+### 网络安全
+
+- API 默认监听 `0.0.0.0:22222` 且 CORS 默认允许全部来源（`api.cors.allowed-origins = ["*"]`），公网部署务必用防火墙或反向代理收口
+- 需要 HTTPS 时在前置反向代理终结，mod 本身不提供 TLS
+- 反代场景下服务端会读取 `X-Forwarded-For` / `X-Real-IP` 记录操作者 IP，请确保这两个头由可信代理设置
 
 ## 使用示例
 
 ### 白名单管理示例
 
-#### 🎯 新版API - 简化的白名单管理
-
 ```bash
 # 1. 获取白名单列表
-curl -X GET http://localhost:22222/api/v1/whitelist \
+curl -X GET "http://localhost:22222/api/v1/whitelist?page=1&size=20" \
   -H "X-API-Key: sk-your-api-token-here"
 
-# 2. 添加白名单条目（只需玩家名）
+# 2. 添加白名单条目（只需玩家名 + 来源）
 curl -X POST http://localhost:22222/api/v1/whitelist \
   -H "Content-Type: application/json" \
   -H "X-API-Key: sk-your-api-token-here" \
   -d '{
     "name": "NewPlayer",
-    "source": "API"
+    "source": "ADMIN"
   }'
 
 # 3. 添加白名单条目（完整参数）
@@ -1103,68 +1294,35 @@ curl -X POST http://localhost:22222/api/v1/whitelist \
   -H "X-API-Key: sk-your-api-token-here" \
   -d '{
     "name": "NewPlayer",
-    "source": "ADMIN", 
+    "source": "ADMIN",
     "added_by_name": "AdminUser",
-    "added_by_uuid": "admin-uuid-here"
+    "added_by_uuid": "API",
+    "qq": "10001"
   }'
 
-# 4. 删除白名单条目
+# 4. 按 UUID 删除
 curl -X DELETE http://localhost:22222/api/v1/whitelist/550e8400-e29b-41d4-a716-446655440000 \
   -H "X-API-Key: sk-your-api-token-here"
 
-# 5. 获取白名单统计
+# 5. 按玩家名删除（UUID 未补充时用这个）
+curl -X DELETE http://localhost:22222/api/v1/whitelist/by-name/NewPlayer \
+  -H "X-API-Key: sk-your-api-token-here"
+
+# 6. 获取白名单统计
 curl -X GET http://localhost:22222/api/v1/whitelist/stats \
   -H "X-API-Key: sk-your-api-token-here"
 
-# 6. 手动触发同步
-curl -X POST http://localhost:22222/api/v1/whitelist/sync \
-  -H "X-API-Key: sk-your-api-token-here"
-
-# 7. 获取同步状态
-curl -X GET http://localhost:22222/api/v1/whitelist/sync/status \
-  -H "X-API-Key: sk-your-api-token-here"
-
-# 8. 生成注册令牌（需要管理员密码）
-curl -X POST http://localhost:22222/api/v1/admin/generate-token \
+# 7. 为已加白玩家重新签发注册码
+curl -X POST http://localhost:22222/api/v1/whitelist/regcode \
   -H "Content-Type: application/json" \
-  -H "X-Admin-Password: your-admin-password" \
-  -d '{
-    "expiryHours": 24
-  }'
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{"name": "NewPlayer"}'
 ```
 
-#### 批量操作示例
+### 启用/禁用与批量操作
 
 ```bash
-# 批量添加白名单（新版）
-curl -X POST http://localhost:22222/api/v1/whitelist/batch \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: sk-your-api-token-here" \
-  -d '{
-    "operation": "add",
-    "source": "API",
-    "added_by_name": "AdminUser",
-    "players": [
-      {"name": "Player1"},
-      {"name": "Player2"},
-      {"name": "Player3"}
-    ]
-  }'
-
-# 批量删除白名单
-curl -X POST http://localhost:22222/api/v1/whitelist/batch \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: sk-your-api-token-here" \
-  -d '{
-    "operation": "remove",
-    "added_by_name": "AdminUser",
-    "players": [
-      {"uuid": "550e8400-e29b-41d4-a716-446655440000"},
-      {"uuid": "550e8400-e29b-41d4-a716-446655440001"}
-    ]
-  }'
-
-# 禁用某玩家的访问权限（保留在白名单, 进服被拒并提示已被管理员关闭）
+# 禁用某玩家的访问权限（保留在白名单，进服被拒并提示已被管理员关闭）
 curl -X PUT http://localhost:22222/api/v1/whitelist/by-name/Player1/status \
   -H "Content-Type: application/json" \
   -H "X-API-Key: sk-your-api-token-here" \
@@ -1175,6 +1333,33 @@ curl -X PUT http://localhost:22222/api/v1/whitelist/by-name/Player1/status \
   -H "Content-Type: application/json" \
   -H "X-API-Key: sk-your-api-token-here" \
   -d '{"is_active": true}'
+
+# 批量添加
+curl -X POST http://localhost:22222/api/v1/whitelist/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{
+    "operation": "add",
+    "source": "ADMIN",
+    "added_by_name": "AdminUser",
+    "players": [
+      {"name": "Player1"},
+      {"name": "Player2"},
+      {"name": "Player3"}
+    ]
+  }'
+
+# 批量删除
+curl -X POST http://localhost:22222/api/v1/whitelist/batch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{
+    "operation": "remove",
+    "players": [
+      {"uuid": "550e8400-e29b-41d4-a716-446655440000"},
+      {"uuid": "550e8400-e29b-41d4-a716-446655440001"}
+    ]
+  }'
 
 # 批量禁用
 curl -X POST http://localhost:22222/api/v1/whitelist/batch \
@@ -1189,28 +1374,26 @@ curl -X POST http://localhost:22222/api/v1/whitelist/batch \
   }'
 ```
 
-#### 用户自助注册示例
+### 管理员登录与 JWT 调用
 
 ```bash
-# 用户注册（只需玩家名）
-curl -X POST http://localhost:22222/api/v1/register \
+# 1. 登录取 JWT
+curl -X POST http://localhost:22222/api/v1/admin/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx",
-    "playerName": "NewPlayer"
-  }'
+  -d '{"username": "admin", "password": "your-password"}'
 
-# 用户注册（提供UUID）
-curl -X POST http://localhost:22222/api/v1/register \
+# 2. 用 JWT 查询当前管理员（此端点不接受 X-API-Key）
+curl -X GET http://localhost:22222/api/v1/admin/me \
+  -H "Authorization: Bearer eyJhbGciOi..."
+
+# 3. 生成管理员注册令牌（X-API-Key 或 JWT 均可）
+curl -X POST http://localhost:22222/api/v1/admin/generate-token \
   -H "Content-Type: application/json" \
-  -d '{
-    "token": "reg_xxxxxxxxxxxxxxxxxxxxxxxxx", 
-    "playerName": "NewPlayer",
-    "playerUuid": "550e8400-e29b-41d4-a716-446655440000"
-  }'
+  -H "X-API-Key: sk-your-api-token-here" \
+  -d '{"expiryHours": 24}'
 ```
 
-### 玩家数据查询示例
+### 玩家数据与监控
 
 ```bash
 # 查询在线玩家数据
@@ -1220,175 +1403,49 @@ curl -X GET "http://localhost:22222/api/v1/player?name=PlayerName" \
 # 查询离线玩家数据
 curl -X GET "http://localhost:22222/api/v1/player?name=PlayerName&includeOffline=true" \
   -H "X-API-Key: sk-your-api-token-here"
-```
 
-### 系统监控示例
-
-```bash
-# 获取服务器状态
-curl -X GET http://localhost:22222/api/v1/server/status \
+# 在线玩家列表
+curl -X GET http://localhost:22222/api/v1/server/players \
   -H "X-API-Key: sk-your-api-token-here"
 
-# 获取服务器性能数据
+# 服务器性能
 curl -X GET http://localhost:22222/api/v1/server/performance \
   -H "X-API-Key: sk-your-api-token-here"
 
-# 健康检查（无需认证）
-curl -X GET http://localhost:22222/api/v1/health
-```
-
-## 版本信息
-
-- **当前版本**: v0.5.0
-- **API版本**: v1  
-- **最后更新**: 2025-10-02
-- **兼容性**: Minecraft 1.20.1, Arclight
-- **设计理念**: 基于 WhitelistPlus 插件设计
-
-## 更新日志
-
-### v0.5.0 (2025-10-02) - WhitelistPlus设计集成
-- 🎯 **重大改进**：基于WhitelistPlus设计理念重构白名单系统
-- ✨ **简化API**：添加白名单现在只需玩家名，UUID可选
-- 🔄 **自动UUID补充**：玩家首次登录时自动补充UUID
-- 📊 **增强统计**：新增UUID待补充状态、来源分解等统计信息
-- 🔧 **批量操作**：支持批量添加和删除操作
-- 📁 **同步系统**：新增UUID更新同步任务类型
-- 🎮 **兼容性**：完美支持离线和正版服务器
-- 📖 **文档更新**：全面更新API文档和使用示例
-
-### v0.1.0 (2024-01-01) - 初始版本
-- 🚀 初始版本发布
-- 📡 支持基本的服务器信息获取
-- ⚡ 集成 Spark 性能监控
-- 🌍 添加详细的维度信息
-- 📈 实现完整的性能数据收集
-- 🔐 基础白名单管理功能
-
-## 迁移指南
-
-### 从v0.1.0升级到v0.5.0
-
-**API变化：**
-1. `POST /api/v1/whitelist` 不再要求 `uuid` 参数
-2. 新增 `uuid_pending` 状态字段
-3. 批量操作API结构调整
-4. 新增同步状态查询端点
-
-**兼容性：**
-- ✅ 向后兼容：旧的API调用仍然有效
-- ✅ 数据库兼容：现有数据无需迁移
-- ✅ JSON文件兼容：现有白名单文件继续有效
-
-**建议操作：**
-```bash
-# 检查新的统计信息
-curl -X GET http://localhost:22222/api/v1/whitelist/stats \
+# 操作日志（最近 50 条 ADD）
+curl -X GET "http://localhost:22222/api/v1/logs/operations?type=ADD&limit=50" \
   -H "X-API-Key: sk-your-api-token-here"
 
-# 测试新的简化添加API
-curl -X POST http://localhost:22222/api/v1/whitelist \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: sk-your-api-token-here" \
-  -d '{"name": "TestPlayer", "source": "API"}'
+# 物品图标（公开，无需认证）
+curl -X GET "http://localhost:22222/api/v1/item-icon?id=minecraft:diamond_sword" -o icon.png
 ```
-
-## 技术支持
-
-如果您在使用API时遇到问题，请：
-
-1. 📋 检查本文档中的错误代码说明
-2. 🔍 验证请求格式和认证信息  
-3. 📝 查看服务器日志获取详细错误信息
-4. 💬 查看 UUID自动补充机制 部分了解新特性
-5. 🆘 联系技术支持团队
-
-## 常见问题
-
-**Q: 为什么有些玩家的UUID显示为null？**
-A: 这是正常情况。采用新的设计后，玩家添加时UUID可以为空，会在首次登录时自动补充。
-
-**Q: 如何确认UUID已经补充？**  
-A: 可以通过 `GET /api/v1/whitelist/stats` 查看 `uuid_pending_entries` 数量，或查看具体玩家条目的 `uuid_pending` 字段。
-
-**Q: 旧的API调用还能使用吗？**
-A: 是的，系统保持向后兼容，但建议使用新的简化API以获得更好的体验。
-
-**Q: 为什么查询玩家数据时提示"玩家不在线"？**
-A: 默认情况下，API 只查询在线玩家。如果需要查询离线玩家，请在 URL 中添加 `includeOffline=true` 参数。
-
-**Q: 查询玩家数据时为什么会超时？**
-A: 玩家数据查询需要在 Minecraft 主线程执行，如果服务器 TPS 过低或负载过高，可能导致超时。查询在线玩家超时时间为 3 秒，离线玩家为 5 秒。
-
-**Q: 为什么会收到 429 错误（请求过多）？**
-A: 系统限制最多同时处理 5 个玩家数据查询请求，以保护服务器性能。请稍后重试或减少并发请求数量。
-
----
-
-*本文档描述了ConvenientAccess白名单管理系统的API接口。系统基于WhitelistPlus设计理念，专注于简化白名单管理流程，同时保持数据完整性和系统可靠性。*
-| 401 | 未授权访问 |
-| 403 | 访问被拒绝 |
-| 404 | API端点不存在 |
-| 405 | 请求方法不支持 |
-| 429 | 请求频率超限 |
-| 500 | 服务器内部错误 |
-
-## 请求频率限制
-
-默认情况下，每个IP地址每分钟最多可以发送60个请求。超过限制将返回429错误。
-
-## CORS 支持
-
-API 支持跨域请求，默认允许所有来源。可以在配置文件中自定义允许的来源。
-
-## 缓存机制
-
-为了提高性能，API 使用了智能缓存系统：
-
-- 服务器信息：缓存5分钟
-- 性能数据：缓存5秒
-- 玩家数据：缓存30秒
-- 世界数据：缓存1分钟
-
-## Spark 集成
-
-当服务器安装了 Spark 插件时，API 会自动使用 Spark 提供的高精度性能数据：
-
-- 更准确的 TPS 和 MSPT 测量
-- 详细的 CPU 使用率统计
-- 系统级性能指标
-
-如果 Spark 不可用，API 会自动降级使用内置的性能监控功能。
-
-## 示例代码
 
 ### JavaScript (Fetch API)
 
 ```javascript
-// 获取服务器状态
-fetch('http://your-server:22222/api/v1/server/status', {
-  headers: {
-    'X-API-Key': 'sk-your-api-token-here'
-  }
+// 获取在线玩家列表
+fetch('http://your-server:22222/api/v1/server/players', {
+  headers: { 'X-API-Key': 'sk-your-api-token-here' }
 })
   .then(response => response.json())
   .then(data => {
     if (data.success) {
-      console.log('服务器在线:', data.data.online);
+      console.log('在线玩家数:', data.data.count);
     }
   });
 
 // 获取性能数据
 fetch('http://your-server:22222/api/v1/server/performance', {
-  headers: {
-    'X-API-Key': 'sk-your-api-token-here'
-  }
+  headers: { 'X-API-Key': 'sk-your-api-token-here' }
 })
   .then(response => response.json())
   .then(data => {
-    if (data.success) {
-      const tps = data.data.tps.values.last_1m;
-      console.log('当前TPS:', tps);
+    if (data.success && data.data.tps.available) {
+      console.log('近 1 分钟 TPS:', data.data.tps.values.last_1m);
+      // CPU 是 0..1 的比例, 展示成百分比需要 *100
+      if (data.data.cpu.available) {
+        console.log('进程 CPU:', (data.data.cpu.process.last_1m * 100).toFixed(2) + '%');
+      }
     }
   });
 ```
@@ -1398,67 +1455,77 @@ fetch('http://your-server:22222/api/v1/server/performance', {
 ```python
 import requests
 
-# 设置认证头
-headers = {
-    'X-API-Key': 'sk-your-api-token-here'
-}
+BASE = 'http://your-server:22222/api/v1'
+headers = {'X-API-Key': 'sk-your-api-token-here'}
 
-# 获取玩家列表
-response = requests.get('http://your-server:22222/api/v1/players/list', headers=headers)
-if response.status_code == 200:
-    data = response.json()
-    if data['success']:
-        players = data['data']['players']
-        print(f'在线玩家数: {len(players)}')
+# 获取在线玩家
+response = requests.get(f'{BASE}/server/players', headers=headers)
+data = response.json()
+if data['success']:
+    print(f"在线玩家数: {data['data']['count']}")
 
-# 添加白名单示例
-def add_player_to_whitelist(player_name, source="API"):
-    payload = {
-        "name": player_name,
-        "source": source
-    }
-    response = requests.post(
-        'http://your-server:22222/api/v1/whitelist',
-        json=payload,
-        headers=headers
-    )
-    return response.json()
+# 添加白名单
+def add_player_to_whitelist(player_name, source="ADMIN"):
+    payload = {"name": player_name, "source": source}
+    response = requests.post(f'{BASE}/whitelist', json=payload, headers=headers)
+    return response.status_code, response.json()
 ```
 
-### cURL
+## CORS 支持
 
-```bash
-# 获取服务器状态
-curl -X GET "http://your-server:22222/api/v1/server/status" \
-     -H "X-API-Key: sk-your-api-token-here" \
-     -H "Accept: application/json"
+`api.cors.enabled` 默认 `true`，`api.cors.allowed-origins` 默认 `["*"]`。响应头由 `HttpServer` 统一附加：
 
-# 获取世界信息  
-curl -X GET "http://your-server:22222/api/v1/worlds/list" \
-     -H "X-API-Key: sk-your-api-token-here" \
-     -H "Accept: application/json"
-
-# 使用Authorization Bearer认证的请求
-curl -X GET "http://your-server:22222/api/v1/server/performance" \
-     -H "Authorization: Bearer sk-your-api-token-here" \
-     -H "Accept: application/json"
+```
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization, X-API-Key, X-Requested-With
+Access-Control-Max-Age: 3600
 ```
 
-## 更新日志
+`OPTIONS` 预检请求在进入路由前直接返回 200。
 
-### v0.5.0 (2025-10-02)
-- 🎉 **重大更新**：基于 WhitelistPlus 设计理念完全重构
-- ✨ **简化白名单管理**：添加白名单只需玩家名，UUID自动补充
-- 🔐 **新增认证系统**：可配置的API Token认证，默认启用安全保护
-- 🔑 **自动生成凭证**：插件首次启动自动生成管理员密码和API令牌
-- 📊 **增强统计功能**：新增UUID待补充状态、来源分析等详细统计
-- 🔄 **智能UUID补充**：玩家首次登录时自动补充UUID信息
-- 🚀 **批量操作优化**：支持名称批量添加，提高管理效率
-- 📝 **API文档更新**：完整的认证示例和使用指南
+## 缓存说明
 
-### v0.1.0
-- 初始版本发布
-- 支持基本的服务器信息获取
-- 集成 Spark 性能监控
-- 添加详细的维度信息
-- 实现完整的性能数据收集
+服务端**没有** HTTP 响应级缓存，每次请求都会实时查询。实际存在的缓存只有两处：
+
+- `WhitelistManager` 的进程内白名单缓存，用于登录校验，不影响 API 查询（API 直接读库）
+- `ItemIconHandler` 的 PNG 字节缓存（含未命中负缓存），并对客户端下发 `Cache-Control: public, max-age=86400`
+
+## Spark 集成
+
+安装 spark mod 后，`/api/v1/server/performance` 会经 `me.lucko.spark.api` 提供精确的 TPS / MSPT / CPU 数据。spark 未安装时自动降级：TPS / MSPT 由 `MinecraftServer.getAverageTickTime()` 估算，CPU 数据缺失（`available: false`），内存 / GC / 线程始终由 JVM MXBean 提供，不受影响。
+
+## 版本信息
+
+- **mod id**: `shinoyuki_accesshub`
+- **mod 版本**: 0.2.5
+- **API 版本**: v1
+- **运行环境**: Minecraft 1.20.1 + Forge 47.4.20（`[47,)`）
+- **可选依赖**: spark（性能数据精度）
+
+## 常见问题
+
+**Q: 为什么带上 `Authorization: Bearer sk-...` 会 401？**
+A: `Authorization: Bearer` 只走 JWT 校验分支。API 令牌必须放在 `X-API-Key` 头里。
+
+**Q: 为什么 `/api/v1/health`、`/api/v1/server/status`、`/api/v1/players/list` 全是 404？**
+A: 这些端点在当前 Forge 实现中不存在，是旧文档遗留。在线玩家请用 `/api/v1/server/players`，性能请用 `/api/v1/server/performance`。
+
+**Q: `POST /api/v1/whitelist` 传 `"source": "API"` 为什么 400？**
+A: `WhitelistEntry.Source` 枚举只有 `PLAYER` / `ADMIN` / `SYSTEM`。若要标记调用渠道，请用 `added_by_uuid` 字段（如 `API` / `WEBUI`）。
+
+**Q: 为什么白名单列表里有的条目没有 `uuid` 键？**
+A: 该玩家的 UUID 尚未补充（值为 null，Gson 省略了该键），会在首次登录时自动补齐。
+
+**Q: 为什么 CPU 使用率看起来只有 0.006？**
+A: `cpu.system` / `cpu.process` 是 0..1 的比例，`0.006` 即 0.6%，展示时需要乘以 100。
+
+**Q: 查询玩家数据为什么会超时或 429？**
+A: 玩家数据必须在 Minecraft 主线程采集。在线查询超时 3 秒、离线 5 秒；并发上限 5，超出返回 429。
+
+**Q: 为什么日志统计的分项加起来小于 `total`？**
+A: 统计端点只按 `ADD` / `REMOVE` / `BATCH_ADD` / `BATCH_REMOVE` / `UPDATE` 五类分项计数，而实际还会写入 `SET_ACTIVE` 和 `GENCODE` 两类日志，它们只计入 `total`。
+
+---
+
+*本文档依据 `src/main/java/com/shinoyuki/accesshub/` 下的源码校准。若实现变更而文档未同步，请以 `api/ApiRouter.java` 的路由分支与各 Controller 的实现为准。*
