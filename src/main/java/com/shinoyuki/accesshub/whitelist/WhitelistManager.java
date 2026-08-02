@@ -802,9 +802,13 @@ public class WhitelistManager {
     }
     
     /**
-     * 验证玩家名称格式
+     * 验证玩家名称格式 (3-16 位字母、数字、下划线)。
+     *
+     * 公开为 static 供 API 层前置校验复用: 校验规则必须只有这一处定义, 否则 Controller
+     * 另写一份宽松规则时, 非法名字会一路走到这里被静默判 false, 最终以"玩家已在白名单中"
+     * 这种与实情无关的文案返回给调用方。
      */
-    private boolean isValidPlayerName(String name) {
+    public static boolean isValidPlayerName(String name) {
         return name != null && name.length() >= 3 && name.length() <= 16 && name.matches("^[a-zA-Z0-9_]+$");
     }
     

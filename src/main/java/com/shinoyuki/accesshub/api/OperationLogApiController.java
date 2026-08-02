@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,7 +66,7 @@ public class OperationLogApiController {
      * 处理GET /api/v1/logs/operations - 查询操作日志
      * 
      * 查询参数:
-     * - type: 操作类型(ADD/REMOVE/BATCH_ADD/BATCH_REMOVE/UPDATE)
+     * - type: 操作类型(实际写入的有 ADD/REMOVE/SET_ACTIVE/GENCODE)
      * - target_uuid: 目标玩家UUID
      * - target_name: 目标玩家名称
      * - operator_ip: 操作者IP
@@ -206,17 +207,18 @@ public class OperationLogApiController {
                 }
             }
             
-            // 统计各类型操作数量
+            // 按类型聚合。不再硬编码类型清单 —— 原先固定列举 ADD/REMOVE/BATCH_ADD/BATCH_REMOVE/
+            // UPDATE, 而实际写入的只有 ADD/REMOVE/SET_ACTIVE/GENCODE, 结果是三项恒为 0, 另两项
+            // 只进 total 不进分项。改为从库里聚合, 新增操作类型会自动出现在统计中。
             JsonObject stats = new JsonObject();
-            
-            String[] operationTypes = {"ADD", "REMOVE", "BATCH_ADD", "BATCH_REMOVE", "UPDATE"};
-            for (String type : operationTypes) {
-                long count = operationLogDao.countLogs(type, null, null, null, startTime, endTime);
-                stats.addProperty(type.toLowerCase(), count);
+            Map<String, Long> byType = operationLogDao.countByOperationType(startTime, endTime);
+
+            long totalCount = 0;
+            for (Map.Entry<String, Long> entry : byType.entrySet()) {
+                stats.addProperty(entry.getKey().toLowerCase(), entry.getValue());
+                totalCount += entry.getValue();
             }
-            
-            // 总数
-            long totalCount = operationLogDao.countLogs(null, null, null, null, startTime, endTime);
+
             stats.addProperty("total", totalCount);
             
             sendJsonResponse(response, 200, ApiResponse.success(stats, "统计成功"));
@@ -233,6 +235,10 @@ public class OperationLogApiController {
     private void sendJsonResponse(HttpServletResponse response, int statusCode, ApiResponse<?> apiResponse) {
         try {
             response.setStatus(statusCode);
+            // 与 HTTP 状态码对齐, 理由同 WhitelistApiController.sendJsonResponse。
+            if (apiResponse != null) {
+                apiResponse.setCode(statusCode);
+            }
             response.setContentType("application/json;charset=UTF-8");
             response.getWriter().write(gson.toJson(apiResponse));
         } catch (IOException e) {

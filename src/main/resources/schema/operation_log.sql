@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS operation_log (
     execution_time INTEGER,                       -- 执行时间(ms)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
-    -- 约束
-    CONSTRAINT chk_operation_type CHECK (operation_type IN ('ADD', 'REMOVE', 'QUERY', 'BATCH_ADD', 'BATCH_REMOVE', 'SYNC', 'UNAUTHORIZED_ACCESS'))
+    -- 约束。新增操作类型时必须同步这里, 否则 INSERT 会被 CHECK 拒收, 而 DAO 只把
+    -- SQLException 记成日志并返回 false, 该类日志会被静默丢弃 (SET_ACTIVE/GENCODE 曾如此)。
+    CONSTRAINT chk_operation_type CHECK (operation_type IN
+        ('ADD', 'REMOVE', 'QUERY', 'BATCH_ADD', 'BATCH_REMOVE', 'SYNC',
+         'UNAUTHORIZED_ACCESS', 'SET_ACTIVE', 'GENCODE'))
 );

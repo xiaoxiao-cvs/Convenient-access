@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class DatabaseVersionMigrationTest {
 
-    private static final int CURRENT_VERSION = 6;
+    private static final int CURRENT_VERSION = 7;
 
     @TempDir
     File tempDir;
@@ -88,8 +88,24 @@ class DatabaseVersionMigrationTest {
         File dbFile = new File(tempDir, "whitelist.db");
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbFile.getAbsolutePath());
              Statement s = c.createStatement()) {
-            // 真实 v3 库自 v1 起就有 whitelist 表; migrate_5_to_6 是 ALTER, 需该表存在
+            // 真实 v3 库自 v1 起就有 whitelist 与 operation_log 两张表:
+            // migrate_5_to_6 是 ALTER 需前者; migrate_6_to_7 重建后者并迁数据, 故按当时的
+            // 结构(旧 CHECK, 不含 SET_ACTIVE/GENCODE)预置, 并塞一行验证迁移不丢数据。
             s.execute("CREATE TABLE whitelist (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+            s.execute("CREATE TABLE operation_log ("
+                    + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    + "operation_type VARCHAR(20) NOT NULL,"
+                    + "target_uuid VARCHAR(36),"
+                    + "target_name VARCHAR(16),"
+                    + "operator_ip VARCHAR(45),"
+                    + "operator_agent TEXT,"
+                    + "request_data TEXT,"
+                    + "response_status INTEGER,"
+                    + "execution_time INTEGER,"
+                    + "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                    + "CONSTRAINT chk_operation_type CHECK (operation_type IN "
+                    + "('ADD','REMOVE','QUERY','BATCH_ADD','BATCH_REMOVE','SYNC','UNAUTHORIZED_ACCESS')))");
+            s.execute("INSERT INTO operation_log (operation_type, target_name) VALUES ('ADD', 'legacyrow')");
             s.execute("CREATE TABLE database_version (version INTEGER PRIMARY KEY)");
             s.execute("INSERT INTO database_version (version) VALUES (1)");
             s.execute("INSERT INTO database_version (version) VALUES (2)");
@@ -103,6 +119,20 @@ class DatabaseVersionMigrationTest {
         assertEquals(CURRENT_VERSION, version(db), "应升级到最新版本");
         assertTrue(tableExists(db, "player_registration_codes"), "3->4 迁移应建出注册码表");
         assertTrue(columnExists(db, "whitelist", "qq"), "5->6 迁移应给 whitelist 加 qq 列");
+
+        // 6->7 重建 operation_log: 既有数据必须原样迁过来, 且新类型此时应可写入
+        try (Connection c = db.getConnection();
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT COUNT(*) FROM operation_log WHERE target_name='legacyrow'")) {
+            rs.next();
+            assertEquals(1, rs.getInt(1), "6->7 重建表不应丢失既有日志");
+        }
+        try (Connection c = db.getConnection();
+             Statement s = c.createStatement()) {
+            s.execute("INSERT INTO operation_log (operation_type, target_name) VALUES ('SET_ACTIVE', 'x')");
+            s.execute("INSERT INTO operation_log (operation_type, target_name) VALUES ('GENCODE', 'x')");
+        }
+
         db.shutdown();
     }
 }

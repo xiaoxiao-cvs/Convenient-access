@@ -182,8 +182,19 @@ public class WhitelistApiController {
             }
             
             // 新逻辑：只使用玩家名添加到白名单，UUID留空等玩家登录时补充
+            // 前置校验玩家名格式。不拦的话 WhitelistManager 会静默返回 false, 与"已存在"
+            // 共用同一条 409 分支, 结果是格式错误的请求收到"玩家已在白名单中"这种与实情
+            // 无关的提示。校验规则复用 WhitelistManager 的同一份实现, 避免两处规则分叉。
+            if (!WhitelistManager.isValidPlayerName(name)) {
+                sendJsonResponse(response, 400,
+                        ApiResponse.badRequest("玩家名格式无效: 需为 3-16 位字母、数字或下划线"));
+                logOperation("ADD", null, name, request, requestBody, 400,
+                        System.currentTimeMillis() - startTime);
+                return;
+            }
+
             logger.info("添加玩家到白名单（仅用户名）: {}", name);
-            
+
             // 可选联系 QQ (问卷审核加白时带入): 空串归一为 null
             String rawQq = (json.has("qq") && !json.get("qq").isJsonNull()) ? json.get("qq").getAsString().trim() : "";
             String qq = rawQq.isEmpty() ? null : rawQq;
@@ -537,6 +548,11 @@ public class WhitelistApiController {
     private void sendJsonResponse(HttpServletResponse response, int statusCode, ApiResponse<?> apiResponse) {
         try {
             response.setStatus(statusCode);
+            // 与 HTTP 状态码对齐: ApiResponse 的工厂方法只能给出 200/500 的默认值, 真实状态码
+            // (201/207/409/429 等) 到这一层才知道。不同步的话客户端读 body.code 会被误导。
+            if (apiResponse != null) {
+                apiResponse.setCode(statusCode);
+            }
             response.setContentType("application/json");
             response.setCharacterEncoding("UTF-8");
             response.getWriter().write(gson.toJson(apiResponse));
@@ -846,7 +862,7 @@ public class WhitelistApiController {
               String operatorIp = getClientIp(request);
               String operatorAgent = request.getHeader("User-Agent");
               
-              operationLogDao.logOperation(
+              boolean recorded = operationLogDao.logOperation(
                   operationType,
                   targetUuid,
                   targetName,
@@ -856,6 +872,12 @@ public class WhitelistApiController {
                   responseStatus,
                   executionTime
               );
+              // 写日志失败不该影响业务响应, 但必须留痕。此前这里丢弃返回值, 加上 DAO 把
+              // SQLException 吞成 false, 导致 CHECK 约束漏配类型时整类日志被静默丢弃却无人察觉。
+              if (!recorded) {
+                  logger.warn("操作日志写入失败(已忽略, 不影响业务): type={} target={}",
+                          operationType, targetName);
+              }
           } catch (Exception e) {
               logger.error("记录操作日志失败", e);
           }

@@ -6,7 +6,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,7 +28,9 @@ public class OperationLogDao {
     
     /**
      * 记录操作日志
-     * @param operationType 操作类型 (ADD, REMOVE, QUERY, BATCH_ADD, BATCH_REMOVE, SYNC)
+     * @param operationType 操作类型。必须在 operation_log 的 chk_operation_type 白名单内,
+     *                      否则 INSERT 被拒、本方法返回 false (调用方务必检查返回值)。
+     *                      代码实际写入的有 ADD / REMOVE / SET_ACTIVE / GENCODE / UNAUTHORIZED_ACCESS
      * @param targetUuid 目标玩家UUID
      * @param targetName 目标玩家名称
      * @param operatorIp 操作者IP
@@ -200,7 +204,56 @@ public class OperationLogDao {
             return 0;
         }
     }
-    
+
+    /**
+     * 按操作类型聚合统计。
+     *
+     * 返回库中实际出现过的类型, 不预设清单: 调用方若硬编码一份类型数组, 会随着新增操作类型
+     * 而失配 —— 此前统计固定列举 ADD/REMOVE/BATCH_ADD/BATCH_REMOVE/UPDATE, 而实际写入的是
+     * ADD/REMOVE/SET_ACTIVE/GENCODE, 导致三项恒为 0、另两项完全不出现在分项里。
+     *
+     * @param startTime 开始时间(可选)
+     * @param endTime 结束时间(可选)
+     * @return 操作类型 -> 条数, 按条数降序; 查询失败返回空 Map
+     */
+    public Map<String, Long> countByOperationType(LocalDateTime startTime, LocalDateTime endTime) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT operation_type, COUNT(*) AS cnt FROM operation_log WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+
+        if (startTime != null) {
+            sql.append(" AND created_at >= ?");
+            params.add(java.sql.Timestamp.valueOf(startTime));
+        }
+
+        if (endTime != null) {
+            sql.append(" AND created_at <= ?");
+            params.add(java.sql.Timestamp.valueOf(endTime));
+        }
+
+        sql.append(" GROUP BY operation_type ORDER BY cnt DESC");
+
+        Map<String, Long> counts = new LinkedHashMap<>();
+        try (Connection conn = dbManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+
+            for (int i = 0; i < params.size(); i++) {
+                pstmt.setObject(i + 1, params.get(i));
+            }
+
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                String type = rs.getString("operation_type");
+                if (type != null && !type.isEmpty()) {
+                    counts.put(type, rs.getLong("cnt"));
+                }
+            }
+        } catch (SQLException e) {
+            logger.error("按类型统计操作日志失败: {}", e.getMessage(), e);
+        }
+        return counts;
+    }
+
     /**
      * 清理旧的操作日志
      * @param daysToKeep 保留天数

@@ -265,6 +265,10 @@ public class UserApiController {
     private void sendJsonResponse(HttpServletResponse response, int statusCode, ApiResponse<?> apiResponse) {
         try {
             response.setStatus(statusCode);
+            // 与 HTTP 状态码对齐, 理由同 WhitelistApiController.sendJsonResponse。
+            if (apiResponse != null) {
+                apiResponse.setCode(statusCode);
+            }
             response.setContentType("application/json");
             response.setCharacterEncoding("UTF-8");
             

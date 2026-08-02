@@ -45,7 +45,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 数据库版本
-    private static final int CURRENT_VERSION = 6; // v6: 白名单增 qq 列 (问卷联系字段)
+    private static final int CURRENT_VERSION = 7; // v7: operation_log 的 CHECK 补入 SET_ACTIVE/GENCODE
 
     public DatabaseManager(File dataFolder) {
         this.dataFolder = dataFolder;
