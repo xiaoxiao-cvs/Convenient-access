@@ -65,8 +65,10 @@ public final class EnrollCommand {
             return 1;
         }
         if (code == null) {
+            // 注册码在 /register 环节已临时停用, 但换机登记仍可凭管理员发的码 (/accesshub auth gencode);
+            // 这条面向玩家的提示不再主动宣传码, 免得又要解释一遍"码是什么"。恢复时补回 "或新机用注册码: /enroll <注册码>"
             player.sendSystemMessage(colored(
-                    "请先 /login 登录后再 /enroll, 或新机用注册码: /enroll <注册码>", ChatFormatting.RED));
+                    "请先 /login 登录后再 /enroll (换新设备且忘记密码时联系管理员)", ChatFormatting.RED));
             return 0;
         }
         // 未认证 + 带码: 异步校验 (账号须已注册, 密码=恢复锚) -> 回主线程发起登记 (成功后消费码)

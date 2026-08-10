@@ -10,6 +10,7 @@ import java.io.File;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -21,7 +22,12 @@ import com.shinoyuki.accesshub.database.DatabaseManager;
  * 注册码端到端校验 (走真 SQLite). 断言离线模式防冒名抢注的核心不变量:
  * 码绑定用户名、一次性消费、过期拒绝、缺码/错码拒绝、弱密码即便有码也拒。
  * 这些断言删掉对应业务逻辑后必挂。
+ *
+ * 整类停用: PlayerAuthService.register 的注册码校验已临时注释掉 (玩家看不懂领码流程),
+ * 本类用例全部以"register 必须校验码"为前提, 恢复校验时同步删掉 @Disabled 即可复跑。
+ * 停用期间的免码注册行为由 PlayerCodelessRegisterFlowTest 守护。
  */
+@Disabled("注册码校验已临时停用, 恢复 PlayerAuthService.register 的校验块后删掉本注解")
 class PlayerRegistrationCodeFlowTest {
 
     @TempDir

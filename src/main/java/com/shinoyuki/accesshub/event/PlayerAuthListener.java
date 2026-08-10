@@ -133,9 +133,10 @@ public final class PlayerAuthListener {
         if (registered) {
             player.sendSystemMessage(Component.literal("§e请使用 §a/login <密码> §e登录以解除限制"));
         } else {
+            // 注册码临时停用: 恢复时把用法改回 "<密码> <确认密码> <注册码>", 并把下一行换回"注册码需向管理员索取"
             player.sendSystemMessage(Component.literal(
-                    "§e首次进入, 请使用 §a/register <密码> <确认密码> <注册码> §e注册"));
-            player.sendSystemMessage(Component.literal("§7注册码需向管理员索取 (绑定你的用户名, 一次性)"));
+                    "§e首次进入, 请使用 §a/register <密码> <确认密码> §e注册"));
+            player.sendSystemMessage(Component.literal("§7例: §f/register abcd1234 abcd1234 §7(密码自己定, 两次输一样即可)"));
         }
 
         // 免密 (best-effort): 有设备公钥 + 客户端装了本 mod 则自动挑战-验签解冻; 失败由上面的密码提示兜底

@@ -170,22 +170,24 @@ public final class AccessHubCommand {
                         reply(src, Component.literal("添加失败: " + name + " 可能已在白名单中").withStyle(ChatFormatting.RED));
                         return;
                     }
-                    // 加白成功后, 若玩家认证启用则随回执签发绑定该用户名的一次性注册码, 由 OP 转交玩家
-                    PlayerAuthService auth = mod.getPlayerAuthService();
-                    AccessHubConfig config = mod.getConfig();
-                    if (auth != null && config != null && config.isPlayerAuthEnabled()) {
-                        String regCode = auth.generateRegistrationCode(name);
-                        if (regCode != null) {
-                            reply(src, Component.literal("已添加 " + name + " 到白名单\n注册码: " + regCode
-                                    + " (一次性, 仅限该用户名; 转交该玩家用 /register <密码> <确认> " + regCode + ")")
-                                    .withStyle(ChatFormatting.GREEN));
-                            return;
-                        }
-                        reply(src, Component.literal("已添加 " + name + " 到白名单, 但注册码生成失败 (可用 /accesshub auth gencode "
-                                + name + " 重试)").withStyle(ChatFormatting.YELLOW));
-                        return;
-                    }
-                    reply(src, Component.literal("已添加 " + name + " 到白名单 (UUID 待首次登录补全)").withStyle(ChatFormatting.GREEN));
+                    // 注册码临时停用: 加白不再随回执签发码, 玩家进服直接两参数 /register 即可。
+                    // 恢复时取消下方整块注释, 并删掉那条无码回执。
+                    // PlayerAuthService auth = mod.getPlayerAuthService();
+                    // AccessHubConfig config = mod.getConfig();
+                    // if (auth != null && config != null && config.isPlayerAuthEnabled()) {
+                    //     String regCode = auth.generateRegistrationCode(name);
+                    //     if (regCode != null) {
+                    //         reply(src, Component.literal("已添加 " + name + " 到白名单\n注册码: " + regCode
+                    //                 + " (一次性, 仅限该用户名; 转交该玩家用 /register <密码> <确认> " + regCode + ")")
+                    //                 .withStyle(ChatFormatting.GREEN));
+                    //         return;
+                    //     }
+                    //     reply(src, Component.literal("已添加 " + name + " 到白名单, 但注册码生成失败 (可用 /accesshub auth gencode "
+                    //             + name + " 重试)").withStyle(ChatFormatting.YELLOW));
+                    //     return;
+                    // }
+                    reply(src, Component.literal("已添加 " + name + " 到白名单 (UUID 待首次登录补全; 玩家进服用 /register <密码> <确认密码> 注册)")
+                            .withStyle(ChatFormatting.GREEN));
                 })
                 .exceptionally(t -> {
                     reply(src, Component.literal("添加异常: " + t.getMessage()).withStyle(ChatFormatting.RED));
@@ -337,7 +339,10 @@ public final class AccessHubCommand {
         return 1;
     }
 
-    /** auth gencode &lt;player&gt;: 为指定玩家生成一次性、绑定其用户名、会过期的注册码, 由 OP 转交该玩家。 */
+    /**
+     * auth gencode &lt;player&gt;: 为指定玩家生成一次性、绑定其用户名、会过期的码, 由 OP 转交该玩家。
+     * 注册码在 /register 环节已临时停用, 此命令签发的码当前只对 /enroll (换机免密登记) 有效。
+     */
     private static int doAuthGenCode(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
         CommandSourceStack src = ctx.getSource();
         PlayerAuthService auth = mod.getPlayerAuthService();
@@ -353,9 +358,9 @@ public final class AccessHubCommand {
                     if (code == null) {
                         src.sendFailure(Component.literal("生成注册码失败 (系统繁忙), 请稍后重试"));
                     } else {
-                        src.sendSuccess(() -> Component.literal("§a已为 " + name + " 生成注册码: §e" + code
+                        src.sendSuccess(() -> Component.literal("§a已为 " + name + " 生成码: §e" + code
                                 + " §7(一次性, 仅限该用户名, 有效期 " + config.getPlayerAuthCodeExpiryMinutes()
-                                + " 分钟)\n§7转交该玩家: §f/register <密码> <确认> " + code), false);
+                                + " 分钟)\n§7注册码已停用, 该码仅用于换机登记: §f/enroll " + code), false);
                     }
                 }))
                 .exceptionally(t -> {
@@ -365,7 +370,10 @@ public final class AccessHubCommand {
         return 1;
     }
 
-    /** auth gencode (无参): 为所有白名单中尚未注册的玩家批量生成注册码, 汇总回执给 OP。 */
+    /**
+     * auth gencode (无参): 为所有白名单中尚未注册的玩家批量生成码, 汇总回执给 OP。
+     * 同 gencode &lt;player&gt;: 注册码停用期间这些码只对 /enroll 有效。
+     */
     private static int doAuthGenCodeAll(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
         CommandSourceStack src = ctx.getSource();
         PlayerAuthService auth = mod.getPlayerAuthService();
@@ -377,7 +385,7 @@ public final class AccessHubCommand {
         }
         wm.getWhitelistPaginated(1, 1000, null, null, null, "added_at", "DESC", null, null)
                 .thenAccept(result -> {
-                    StringBuilder sb = new StringBuilder("§6=== 批量注册码 (未注册的白名单玩家) ===");
+                    StringBuilder sb = new StringBuilder("§6=== 批量生成码 (未注册的白名单玩家; 仅 /enroll 可用) ===");
                     int generated = 0, skipped = 0, failed = 0;
                     for (WhitelistEntry entry : result.getItems()) {
                         String pname = entry.getName();
@@ -440,7 +448,7 @@ public final class AccessHubCommand {
         source.sendSuccess(() -> usage("/accesshub auth reset <玩家>", "清除密码强制重注册"), false);
         source.sendSuccess(() -> usage("/accesshub auth unregister <玩家>", "注销玩家认证记录"), false);
         source.sendSuccess(() -> usage("/accesshub auth info <玩家>", "查询玩家认证信息"), false);
-        source.sendSuccess(() -> usage("/accesshub auth gencode <玩家>", "生成绑定注册码 (转交该玩家)"), false);
+        source.sendSuccess(() -> usage("/accesshub auth gencode <玩家>", "生成绑定码 (注册码已停用, 仅 /enroll 可用)"), false);
         source.sendSuccess(() -> usage("/accesshub auth gencode", "为未注册白名单玩家批量生成码"), false);
         source.sendSuccess(() -> usage("/accesshub help", "显示此帮助"), false);
         source.sendSuccess(() -> Component.literal("别名: /ca /ahub").withStyle(ChatFormatting.GRAY), false);

@@ -121,7 +121,7 @@ HTTP 状态码 401。
 | `/api/v1/whitelist` | GET | 获取白名单列表（分页、搜索、排序，含被禁用条目） | X-API-Key 或 JWT |
 | `/api/v1/whitelist` | POST | 添加白名单条目（仅需玩家名） | X-API-Key 或 JWT |
 | `/api/v1/whitelist/batch` | POST | 批量操作（add / remove / enable / disable） | X-API-Key 或 JWT |
-| `/api/v1/whitelist/regcode` | POST | 为指定玩家名签发一次性注册码（仅发码，不加白） | X-API-Key 或 JWT |
+| `/api/v1/whitelist/regcode` | POST | 为指定玩家名签发一次性码（仅发码，不加白；`/register` 已停用校验，码仅供 `/enroll`） | X-API-Key 或 JWT |
 | `/api/v1/whitelist/stats` | GET | 获取白名单统计信息 | X-API-Key 或 JWT |
 | `/api/v1/whitelist/sync` | POST | 兼容桩，JSON 同步已移除 | X-API-Key 或 JWT |
 | `/api/v1/whitelist/sync/status` | GET | 兼容桩，返回纯数据库模式标记 | X-API-Key 或 JWT |
@@ -482,6 +482,9 @@ HTTP 状态码 401。
 
 ### `POST /api/v1/whitelist/regcode`
 
+> 注册码校验自 0.2.6 起临时停用：玩家 `/register <密码> <确认密码>` 两参数即可注册，不再需要码。
+> 本端点与下面的发码字段仍然可用，但签发出来的码当前只对 `/enroll`（换机免密登记）有效。
+
 为指定玩家名签发一次性注册码，仅发码、不改动白名单。与 `POST /api/v1/whitelist`（加白即发码）解耦：当玩家已在白名单（如问卷审核时已加白）时再调加白会撞 409 拿不到码，此端点直接重签注册码，与白名单状态无关。内部会作废该玩家名名下旧的未用码，保证同名同时只有一个有效码；仅返回明文码一次，库内只存其 SHA-256 哈希，明文码不写入操作日志。
 
 主要供问卷后端在玩家凭 hash 自助领码时以服务端身份调用。需玩家离线认证（`common.toml` 的 `[auth] enabled`）启用，否则返回 409。
@@ -510,7 +513,7 @@ HTTP 状态码 401。
 
 **说明：**
 
-- 注册码绑定该玩家名、一次性、`code_expires_minutes` 分钟后过期（`[auth] code-expiry-minutes`，默认 1440），玩家游戏内 `/register <密码> <确认> <注册码>` 使用。
+- 注册码绑定该玩家名、一次性、`code_expires_minutes` 分钟后过期（`[auth] code-expiry-minutes`，默认 1440）。原用途是游戏内 `/register <密码> <确认> <注册码>`；0.2.6 起 `/register` 不再校验码，该码仅供 `/enroll <码>` 换机登记。
 - 缺少 `name` 或名称非法返回 400；玩家认证未启用返回 409 `玩家认证未启用, 无法签发注册码`；生成失败返回 500。
 
 ### `GET /api/v1/whitelist/stats`

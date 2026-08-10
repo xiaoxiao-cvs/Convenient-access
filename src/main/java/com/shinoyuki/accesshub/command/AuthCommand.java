@@ -36,17 +36,23 @@ public final class AuthCommand {
     private AuthCommand() {}
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, AccessHubMod mod) {
-        // /register <password> <confirm> <code> (注册码绑定用户名, 离线模式防冒名抢注; 无码不可注册)
+        // /register <password> <confirm> — 注册码校验已临时停用 (玩家看不懂领码流程), 两参数即可注册。
+        // 三参数节点保留: 旧文案/老玩家仍会带码输入, 此时码被忽略而非报"用法错误"。
+        // 恢复注册码时: 删掉两参数 executes, 并同步恢复 PlayerAuthService.register 的校验块。
         dispatcher.register(Commands.literal("register")
                 .then(Commands.argument("password", StringArgumentType.word())
                         .then(Commands.argument("confirm", StringArgumentType.word())
+                                .executes(ctx -> doRegister(ctx, mod, null))
                                 .then(Commands.argument("code", StringArgumentType.word())
-                                        .executes(ctx -> doRegister(ctx, mod))))));
+                                        .executes(ctx -> doRegister(ctx, mod,
+                                                StringArgumentType.getString(ctx, "code")))))));
         dispatcher.register(Commands.literal("reg")
                 .then(Commands.argument("password", StringArgumentType.word())
                         .then(Commands.argument("confirm", StringArgumentType.word())
+                                .executes(ctx -> doRegister(ctx, mod, null))
                                 .then(Commands.argument("code", StringArgumentType.word())
-                                        .executes(ctx -> doRegister(ctx, mod))))));
+                                        .executes(ctx -> doRegister(ctx, mod,
+                                                StringArgumentType.getString(ctx, "code")))))));
 
         // /login <password>
         dispatcher.register(Commands.literal("login")
@@ -81,7 +87,8 @@ public final class AuthCommand {
         return player;
     }
 
-    private static int doRegister(CommandContext<CommandSourceStack> ctx, AccessHubMod mod) {
+    /** code 为 null 表示玩家未带码 (当前主路径); 带码时该值透传给 service, 但停用期间不参与判定。 */
+    private static int doRegister(CommandContext<CommandSourceStack> ctx, AccessHubMod mod, String code) {
         ServerPlayer player = resolvePlayer(ctx, mod);
         if (player == null) {
             return 0;
@@ -89,7 +96,6 @@ public final class AuthCommand {
         PlayerAuthService auth = mod.getPlayerAuthService();
         String password = StringArgumentType.getString(ctx, "password");
         String confirm = StringArgumentType.getString(ctx, "confirm");
-        String code = StringArgumentType.getString(ctx, "code");
         String name = player.getGameProfile().getName();
         MinecraftServer server = player.getServer();
         if (server == null) {

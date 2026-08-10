@@ -128,38 +128,45 @@ public final class PlayerAuthService {
     }
 
     /**
-     * 注册. 离线模式下必须出示管理员为本用户名签发的注册码 (绑定名字 + 一次性 + 过期),
-     * 以堵死冒名抢注。注册码校验、查重、入库、消费码在同一 try 内 fail-closed:
-     * 任何 SQLException 一律视为失败, 绝不入库或消费码。玩家名主键唯一性兜底并发双注册。
+     * 注册. 查重、入库在同一 try 内 fail-closed: 任何 SQLException 一律视为失败, 绝不入库。
+     * 玩家名主键唯一性兜底并发双注册。
+     *
+     * 注册码校验已临时停用 (2026-08-10): 玩家普遍看不懂"先领码、再带码注册"的流程, 改为白名单放行即可自助设密。
+     * 停用期间冒名抢注只剩白名单兜底 (只有过审玩家名能进服), 抢注窗口 = 加白到该玩家首次注册之间。
+     * 恢复方式: 取消下方两处 "注册码校验 (临时停用)" 注释块, 并同步恢复 AuthCommand 的两参数 /register 节点、
+     * PlayerAuthListener 进服提示与 PlayerRegistrationCodeFlowTest 的 @Disabled。
+     * code 形参保留: 老玩家/旧文案仍可能带码调用, 停用期间该值不参与任何判定。
      */
     public AuthResult register(String username, String password, String code) {
         AuthResult policy = checkPasswordPolicy(password, username, "密码");
         if (policy != null) {
             return policy;
         }
-        String canonical = canonicalizeCode(code);
-        if (canonical.isEmpty()) {
-            return AuthResult.failure("请提供注册码 (向管理员索取): /register <密码> <确认密码> <注册码>");
-        }
+        // ===== 注册码校验 (临时停用, 恢复时整块取消注释) =====
+        // String canonical = canonicalizeCode(code);
+        // if (canonical.isEmpty()) {
+        //     return AuthResult.failure("请提供注册码 (向管理员索取): /register <密码> <确认密码> <注册码>");
+        // }
         try {
             if (dao.findByUsername(username).isPresent()) {
                 return AuthResult.failure("该账号已注册, 请使用 /login 登录");
             }
-            CodeCheck cc = checkCode(username, canonical);
-            if (!cc.isValid()) {
-                return AuthResult.failure(cc.getMessage());
-            }
+            // ===== 注册码校验 + 消费码 (临时停用, 恢复时整块取消注释) =====
+            // CodeCheck cc = checkCode(username, canonical);
+            // if (!cc.isValid()) {
+            //     return AuthResult.failure(cc.getMessage());
+            // }
             String hash = BCrypt.withDefaults().hashToString(BCRYPT_COST, password.toCharArray());
             dao.insert(username, hash);
             // 账号写入即注册成功。消费码与建号非同一事务, 故 markUsed 单独兜底:
             // 失败不回滚、不回报"注册失败" (账号已建, 玩家可直接 /login), 仅告警人工核对。
             // 残留 is_used=0 的码无法被再利用: 它绑定该用户名, 而该名已被占用, register 查重会拦下。
-            try {
-                codeDao.markUsed(cc.getCodeId());
-            } catch (SQLException e) {
-                logger.error("账号已建但注册码未能标记已用, 需人工核对: username={} codeId={}", username, cc.getCodeId(), e);
-            }
-            logger.info("玩家完成注册: {} (注册码 id={})", username, cc.getCodeId());
+            // try {
+            //     codeDao.markUsed(cc.getCodeId());
+            // } catch (SQLException e) {
+            //     logger.error("账号已建但注册码未能标记已用, 需人工核对: username={} codeId={}", username, cc.getCodeId(), e);
+            // }
+            logger.info("玩家完成注册: {} (注册码校验已临时停用)", username);
             return AuthResult.success("注册成功, 请使用 /login 登录");
         } catch (SQLException e) {
             // fail-closed: 入库/校验失败不视为注册成功
@@ -238,7 +245,7 @@ public final class PlayerAuthService {
     public CodeCheck validateEnrollWithCode(String username, String code) {
         try {
             if (dao.findByUsername(username).isEmpty()) {
-                return CodeCheck.fail("请先用注册码 /register 设置密码, 再 /enroll 登记设备 (密码是换机后的恢复手段)");
+                return CodeCheck.fail("请先 /register <密码> <确认密码> 设置密码, 再 /enroll 登记设备 (密码是换机后的恢复手段)");
             }
         } catch (SQLException e) {
             logger.error("enroll 查注册状态异常: {}", username, e);
