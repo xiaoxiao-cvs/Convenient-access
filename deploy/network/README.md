@@ -41,7 +41,23 @@
 把 `allowPorts` 等必要项增量合并进现有配置。`frpc-*.toml` 需按上表校正 `serverAddr`
 端口与 token 后再用。
 
-另外三点实测修正：
+另外几点实测修正：
+
+- **`mcwok.cn` 的 DNS 已经不在 DNSPod 了。** 实测 NS 记录是 `ns1.alidns.com` /
+  `ns2.alidns.com`，即**阿里云 DNS**。本目录里所有以 DNSPod 为前提的文件
+  （`issue-wildcard-cert.sh`、`ddns-dnspod.sh`、`Caddyfile-home` 的 ACME 段）
+  都基于过时信息，**不要照用**，需要按阿里云 DNS 的 API 重写。
+- **证书方案已简化，不再需要泛域名，也就不需要任何 DNS API 凭据。**
+  每台节点只需自己那一个子域名的证书，用 `issue-node-cert.sh` 走 certbot HTTP-01 即可。
+  各机本来就在用同样方式签着 `api.mcwok.cn`、`panel.mcwok.cn`、`wiki.mcwok.cn`、
+  `questionnaire.mcwok.cn` 等证书，路径已验证可行。只有家宽那条线因为 80 端口
+  通常被运营商封，才必须走 DNS-01，那时才需要阿里云 AccessKey。
+- **六台节点的 frps 已全部统一到 v0.70.1**（2026-08-14 完成，含深圳）。
+  升级前用新二进制逐台 `frps verify` 校验过现有配置，旧二进制留有
+  `.bak-<旧版本>` 备份。此前那份版本差异表已不再适用。
+- **`sz.mcwok.cn` 与 `home.mcwok.cn` 目前都没有解析记录**，七条 A 记录一条都还没建。
+  签证书前必须先建好解析，否则 HTTP-01 校验会打到别的机器上，失败还会消耗配额。
+- **上海那台没装 nginx**，要做探针反代得先 `apt-get install -y nginx`。其余五台都有。
 
 - **深圳这台是阿里云 ECS，不是腾讯云**，下方拓扑图沿用了早先的错误标注。
 - **家宽直连尚未开通**：`175.44.0.36` 的 25565 与 25603 均为连接拒绝，路由器端口映射还没做。
@@ -129,30 +145,19 @@ home 直连线（不经过云节点）:
 第二个进程会因端口占用直接启动失败。Linux 下用 `frpc@.service` 这个 template unit
 管理，Windows 见本文第九节。
 
-### frps 版本不统一带来的风险
+### frps 版本
 
-各节点的 frps 版本目前跨度很大，这是实测结果：
+**六台已于 2026-08-14 全部统一到 v0.70.1**，升级前各版本是 0.58.1 到 0.70.1 不等。
+家里的 frpc 用同版本的 v0.70.1 即可，不再有跨版本兼容问题。
 
-| 节点 | frps 版本 |
-| --- | --- |
-| 阿里云ECS-杭州1 | 0.58.1 |
-| 阿里云ECS-深圳1 | 0.67.0 |
-| 阿里云轻量-武汉1 | 0.69.1 |
-| 阿里云轻量-广州1 | 0.70.1 |
-| 阿里云轻量-杭州1 | 0.68.1 |
-| 阿里云ECS-上海1 | 0.68.1 |
+升级手法（以后再升可沿用）：节点从 GitHub 拉取很慢，改为在本地下载一次
+`frp_0.70.1_linux_amd64.tar.gz` 后经 SFTP 分发。顺序是先上传新二进制到临时路径、
+用**新二进制**对**现有配置**跑一次 `frps verify`，通过了才替换并重启，失败则原地放弃，
+重启后若服务未能起来自动回滚。旧二进制保留为 `<原路径>.bak-<旧版本>`。
 
-frp 官方建议 frpc 与 frps 版本保持一致。0.58 与 0.70 之间跨了十几个小版本，
-用单一版本的 frpc 去连全部六台存在兼容风险，尤其是杭州一线那台 0.58.1。
-
-两个可选做法，二选一：
-
-1. **把节点 frps 升到统一版本**（推荐 0.70.1）。深圳那台除外 —— 它承载着线上玩家
-   与面板 API，升级要断服，得挑无人时段单独做。
-2. **家里按节点分别放对应版本的 frpc 二进制**。各 frpc 是独立进程，用不同版本的
-   二进制完全可行，代价是要维护多份二进制。
-
-无论选哪条，先用一条线做连通性验证再铺开，不要六条一起上。
+一个容易误判的现象：frps 重启后 `ss -tln` 会短暂看不到各 proxy 的端口
+（25565、22222 等）。那些端口由 frpc 注册，要等客户端重连才会重新监听，
+不是升级失败。等几秒再看，或直接查 `journalctl -u frps`。
 
 ---
 
@@ -164,12 +169,13 @@ frp 官方建议 frpc 与 frps 版本保持一致。0.58 与 0.70 之间跨了�
 | `frps-gz.toml` | **仅作字段参考，勿直接覆盖** | frps 字段写法示例，见第零节的冲突说明 |
 | `frps-sz.toml` | **仅作字段参考，勿直接覆盖** | 同上 |
 | `nginx-probe.conf` | 各 frp 节点 `/etc/nginx/conf.d/probe.conf` | 节点侧 443 上的 wss 探针反代 |
+| `issue-node-cert.sh` | 各 frp 节点，手工执行 | 用 certbot HTTP-01 签本节点子域名证书，**不需要任何 DNS API 凭据** |
 | `Caddyfile-home` | 家里 `/etc/caddy/Caddyfile` | 家宽侧 wss 探针反代（**推荐**，含 ACME 自动签发） |
 | `nginx-probe-home.conf` | 家里 `/etc/nginx/conf.d/probe-home.conf` | 家宽侧 wss 探针反代（Caddy 的备选，二选一） |
-| `issue-wildcard-cert.sh` | 两个节点，手工执行 | 签发 `*.mcwok.cn` 泛域名证书 |
+| `issue-wildcard-cert.sh` | **已作废，勿用** | 基于 DNSPod 的泛域名签发；DNS 已迁阿里云，且不再需要泛域名，由 `issue-node-cert.sh` 取代 |
 | `frps.service` | 两个节点 `/etc/systemd/system/` | frps 开机自启 |
 | `frpc@.service` | 家里 `/etc/systemd/system/` | frpc 双实例开机自启（template unit） |
-| `ddns-dnspod.sh` | 家里 `/usr/local/bin/` | 家宽动态 IP 同步到 home.mcwok.cn |
+| `ddns-dnspod.sh` | **需重写后再用** | 家宽动态 IP 同步；调的是 DNSPod API，而 DNS 已迁阿里云，须改用阿里云 DNS API |
 
 `Caddyfile-home` 和 `nginx-probe-home.conf` **二选一，不要同时部署** ——
 两者都要监听 443，同时起会导致后启动的那个 bind 失败。
@@ -178,7 +184,12 @@ frp 官方建议 frpc 与 frps 版本保持一致。0.58 与 0.70 之间跨了�
 
 ## 三、DNS 解析规划
 
-域名 `mcwok.cn` 托管在腾讯云 DNSPod。
+域名 `mcwok.cn` 的 DNS 托管在**阿里云 DNS**（实测 NS 为 `ns1.alidns.com` / `ns2.alidns.com`）。
+早前的文档说它在 DNSPod，那是过时信息 —— 解析记录要去阿里云控制台加，
+需要 API 时用的也是阿里云 AccessKey，DNSPod 的密钥在这里没有任何作用。
+
+七条 A 记录目前**一条都还没建**，这是后续所有步骤的前置条件：证书签发要靠它做
+HTTP-01 校验，玩家更是要靠它进服。
 
 | 主机记录 | 类型 | 线路 | 记录值 | TTL | 说明 |
 | --- | --- | --- | --- | --- | --- |
