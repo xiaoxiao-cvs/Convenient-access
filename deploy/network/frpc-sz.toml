@@ -1,0 +1,74 @@
+# frpc 客户端配置 —— sz 线路（家里 -> 腾讯云深圳节点）
+#
+# 适用版本: frp v0.52 及以上的 TOML 格式（本文件按 v0.70.1 的字段名编写）。
+#
+# 一个 frpc 进程只能连接一个 frps。本文件与 frpc-gz.toml 是两个独立进程
+# 各自的配置，必须同时运行，缺一条线路就少一条。
+# 详见 README.md「为什么是两个 frpc 实例」。
+#
+# 部署路径: Linux 为 /etc/frp/frpc-sz.toml；Windows 见 README.md 的 nssm 一节。
+
+serverAddr = "120.24.184.115"
+serverPort = 7000
+
+# 同 gz: 写 IP 不写域名，避免 DNS 故障连带隧道下线。
+
+auth.method = "token"
+# 占位符: 必须与 frps-sz.toml 中的 auth.token 完全一致。
+auth.token = "<FRP_TOKEN>"
+
+loginFailExit = false
+
+transport.protocol = "tcp"
+transport.tls.enable = true
+
+transport.poolCount = 5
+
+# 与 gz 实例错开管理端口，否则同机第二个 frpc 会因端口占用启动失败。
+webServer.addr = "127.0.0.1"
+webServer.port = 7401
+webServer.user = "admin"
+# 占位符: 替换成真实密码。
+webServer.password = "<FRPC_ADMIN_PASSWORD>"
+
+log.to = "./frpc-sz.log"
+log.level = "info"
+log.maxDays = 7
+log.disablePrintColor = true
+
+# ---- Minecraft 主线路 ----
+[[proxies]]
+name = "mc-sz"
+type = "tcp"
+localIP = "127.0.0.1"
+# 转发器上属于 sz 线路的入口端口，与 gz 的 25601 分开，
+# 就是靠这个端口区分玩家是从哪条线进来的。
+localPort = 25602
+# 与 gz 节点的 remotePort 相同。两个 frps 跑在不同机器上，
+# 端口不存在冲突，玩家在任意线路都用标准 25565，客户端不必填端口号。
+remotePort = 25565
+
+# 见 frpc-gz.toml 的说明: 没有这个头，审计日志里的玩家 IP 会全变成回环地址。
+# 线路归属另有依据 (入口端口)，不受这一项影响。
+transport.proxyProtocolVersion = "v2"
+
+transport.useEncryption = false
+transport.useCompression = false
+
+healthCheck.type = "tcp"
+healthCheck.timeoutSeconds = 3
+healthCheck.maxFailed = 3
+healthCheck.intervalSeconds = 10
+
+# ---- 延迟探针 ----
+[[proxies]]
+name = "probe-sz"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 25610
+remotePort = 25610
+
+# 同 gz: 不开 PROXY protocol。探针不解析 PROXY 头，开了反而会让那段二进制头
+# 被当成 HTTP 请求行读进去，握手失败。
+transport.useEncryption = false
+transport.useCompression = false

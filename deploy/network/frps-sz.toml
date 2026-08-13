@@ -1,0 +1,43 @@
+# frps 服务端配置 —— 节点 sz（腾讯云深圳，公网 120.24.184.115）
+#
+# 适用版本: frp v0.52 及以上的 TOML 格式（本文件按 v0.70.1 的字段名编写）。
+# 与 frps-gz.toml 内容基本一致，刻意保留成两份独立文件而不是共用一份 +
+# includes: 两个节点分属不同云厂商，后续大概率要按节点单独调 allowPorts
+# 或换 token，共用文件会让"改一个节点顺手改坏另一个"。
+#
+# 部署路径: /etc/frp/frps.toml
+
+bindAddr = "0.0.0.0"
+bindPort = 7000
+
+auth.method = "token"
+# 占位符: 替换成真实 token。生成方式见 README.md「token 生成」一节。
+# 建议与 gz 节点用不同的 token，这样单节点泄露不会连带另一个节点。
+auth.token = "<FRP_TOKEN>"
+
+transport.tls.force = true
+
+transport.maxPoolCount = 10
+
+# 见 frps-gz.toml 的说明: 防止 token 泄露后节点被当跳板机。
+allowPorts = [
+  { single = 25565 },
+  { single = 25610 },
+]
+
+maxPortsPerClient = 2
+
+detailedErrorsToClient = false
+
+# dashboard 只监听回环，走 SSH 隧道访问:
+# ssh -L 7500:127.0.0.1:7500 root@120.24.184.115
+webServer.addr = "127.0.0.1"
+webServer.port = 7500
+webServer.user = "admin"
+# 占位符: 替换成真实密码。
+webServer.password = "<FRP_DASHBOARD_PASSWORD>"
+
+log.to = "/var/log/frp/frps.log"
+log.level = "info"
+log.maxDays = 7
+log.disablePrintColor = true

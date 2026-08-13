@@ -1,6 +1,8 @@
 package com.shinoyuki.accesshub;
 
+import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.util.List;
 
 import com.mojang.logging.LogUtils;
 import com.shinoyuki.accesshub.api.AdminAuthController;
@@ -32,7 +34,14 @@ import com.shinoyuki.accesshub.deviceauth.DeviceKeyDao;
 import com.shinoyuki.accesshub.deviceauth.net.AuthChannel;
 import com.shinoyuki.accesshub.event.PlayerAuthListener;
 import com.shinoyuki.accesshub.event.PlayerLoginListener;
+import com.shinoyuki.accesshub.api.NetworkInfoHandler;
+import com.shinoyuki.accesshub.api.NetworkInfoHandlerImpl;
+import com.shinoyuki.accesshub.event.NodeSessionListener;
 import com.shinoyuki.accesshub.http.HttpServer;
+import com.shinoyuki.accesshub.net.NodeDefinition;
+import com.shinoyuki.accesshub.net.NodeRelayServer;
+import com.shinoyuki.accesshub.net.NodeSessionRegistry;
+import com.shinoyuki.accesshub.net.ProbeServer;
 import com.shinoyuki.accesshub.operation.OperationLogDao;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
@@ -65,6 +74,9 @@ public final class AccessHubMod {
     private HttpServer httpServer;
     private BackupManager backupManager;
     private SparkIntegration sparkIntegration;
+    private NodeSessionRegistry nodeSessionRegistry;
+    private NodeRelayServer nodeRelayServer;
+    private ProbeServer probeServer;
 
     public AccessHubMod() {
         MinecraftForge.EVENT_BUS.register(this);
@@ -163,10 +175,16 @@ public final class AccessHubMod {
         // 物品图标抽取 (无状态: 仅依赖 ModList + 资源 IO, 内置 PNG 缓存)
         ItemIconHandler itemIconHandler = new ItemIconHandler();
 
+        // 线路会话表. 无条件创建: 转发器未启用时它恒为空表, 查询直接返回 null,
+        // 依赖方 (登录监听器/统计端点) 无需各自做 null 分支。
+        nodeSessionRegistry = new NodeSessionRegistry();
+        NetworkInfoHandler networkInfoHandler =
+                new NetworkInfoHandlerImpl(server, config, nodeSessionRegistry);
+
         ApiRouter apiRouter = new ApiRouter(
                 whitelistController, userController,
                 playerDataHandler, serverInfoHandler,
-                itemIconHandler,
+                itemIconHandler, networkInfoHandler,
                 operationLogController, adminAuthController,
                 config
         );
@@ -183,9 +201,12 @@ public final class AccessHubMod {
         // 注册到 EVENT_BUS, 实例持有 config / whitelistManager / databaseManager 依赖.
         // 不放进 mod 启动早期是因为它依赖 whitelistManager 已初始化完成 (步骤 4).
         PlayerLoginListener loginListener = new PlayerLoginListener(
-                config, whitelistManager, databaseManager);
+                config, whitelistManager, databaseManager, nodeSessionRegistry);
         MinecraftForge.EVENT_BUS.register(loginListener);
         LOGGER.info("白名单登录监听器已注册到事件总线");
+
+        // 8a. 线路归属认领器. 独立于白名单开关, 故单独注册.
+        MinecraftForge.EVENT_BUS.register(new NodeSessionListener(nodeSessionRegistry));
 
         // 8b. 玩家离线认证拦截器 (未认证全限制 + 冻结 + 超时踢出).
         // 注册到 EVENT_BUS 即生效; 内部各 @SubscribeEvent 均先判 auth.enabled 再处理, 禁用时零开销放行.
@@ -196,6 +217,53 @@ public final class AccessHubMod {
         // 9. 数据库自动备份 (定时备份 whitelist.db, 与数据库同目录)
         backupManager = new BackupManager(baseDir.toFile(), config);
         backupManager.initialize();
+
+        // 10. 多线路接入 (frp 中转 + 家宽直连) 与延迟探针
+        startNetworkServices(server);
+    }
+
+    /**
+     * 启动线路转发器与延迟探针。
+     *
+     * 故障不外抛而是就地降级: 端口被占用一类的问题若让整个 initialize 失败, 白名单会跟着失效,
+     * 在 strict-mode 下等于全服玩家都进不来 — 拿服务器可用性去换一个网络增强功能不划算。
+     * 失败时记 error, 线路统计不可用, 玩家仍可经原有端口正常进服。
+     */
+    private void startNetworkServices(net.minecraft.server.MinecraftServer server) {
+        if (config.isNetworkRelayEnabled()) {
+            try {
+                int configuredPort = config.getMinecraftPort();
+                if (configuredPort != server.getPort()) {
+                    LOGGER.warn("network.minecraft-port={} 与服务器实际监听端口 {} 不一致, 转发将连不上目标, 请核对配置",
+                            configuredPort, server.getPort());
+                }
+                List<NodeDefinition> nodes = config.getNodes();
+                if (nodes.isEmpty()) {
+                    LOGGER.warn("多线路接入已启用但 network.nodes 为空, 转发器不启动");
+                } else {
+                    nodeRelayServer = new NodeRelayServer(nodes, config.getRelayBindHost(),
+                            new InetSocketAddress("127.0.0.1", configuredPort), nodeSessionRegistry);
+                    nodeRelayServer.start();
+                    LOGGER.info("多线路接入已启动, 共 {} 条线路", nodes.size());
+                }
+            } catch (Exception e) {
+                LOGGER.error("线路转发器启动失败, 线路统计不可用 (玩家仍可经原有端口进服)", e);
+                nodeRelayServer = null;
+            }
+        } else {
+            LOGGER.info("多线路接入在配置中未启用");
+        }
+
+        if (!config.isProbeEnabled()) {
+            return;
+        }
+        try {
+            probeServer = new ProbeServer(config.getProbeBindHost(), config.getProbePort());
+            probeServer.start();
+        } catch (Exception e) {
+            LOGGER.error("延迟探针启动失败, 自查页面将无法测量线路延迟", e);
+            probeServer = null;
+        }
     }
 
     @SubscribeEvent
@@ -204,6 +272,13 @@ public final class AccessHubMod {
         // 每步独立 try/catch + catch Throwable: 关闭钩子绝不能崩掉关服流程, 且任一步失败不影响后续。
         // 尤其 httpServer.stop() 在 Forge SecureJar 下可能抛 NoClassDefFoundError (relocate 的 Jetty 关闭期
         // 类惰性加载失败), 那是 Error 不是 Exception, 旧的 catch(Exception) 抓不住会逃逸 -> 关服崩 + 服务器关不掉。
+        // 网络入口优先关闭: 先停止接受新连接, 再回收其余资源
+        if (nodeRelayServer != null) {
+            try { nodeRelayServer.stop(); } catch (Throwable t) { LOGGER.warn("线路转发器关闭异常", t); }
+        }
+        if (probeServer != null) {
+            try { probeServer.stop(); } catch (Throwable t) { LOGGER.warn("延迟探针关闭异常", t); }
+        }
         if (backupManager != null) {
             try { backupManager.shutdown(); } catch (Throwable t) { LOGGER.warn("备份管理器关闭异常", t); }
         }

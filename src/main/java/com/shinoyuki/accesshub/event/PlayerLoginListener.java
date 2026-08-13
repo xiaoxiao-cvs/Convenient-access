@@ -11,6 +11,8 @@ import java.util.concurrent.TimeUnit;
 import com.mojang.authlib.GameProfile;
 import com.shinoyuki.accesshub.config.AccessHubConfig;
 import com.shinoyuki.accesshub.database.DatabaseManager;
+import com.shinoyuki.accesshub.net.NodeSession;
+import com.shinoyuki.accesshub.net.NodeSessionRegistry;
 import com.shinoyuki.accesshub.whitelist.AccessDecision;
 import com.shinoyuki.accesshub.whitelist.WhitelistEntry;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
@@ -57,13 +59,16 @@ public final class PlayerLoginListener {
     private final AccessHubConfig config;
     private final WhitelistManager whitelistManager;
     private final DatabaseManager databaseManager;
+    private final NodeSessionRegistry sessionRegistry;
 
     public PlayerLoginListener(AccessHubConfig config,
                                WhitelistManager whitelistManager,
-                               DatabaseManager databaseManager) {
+                               DatabaseManager databaseManager,
+                               NodeSessionRegistry sessionRegistry) {
         this.config = config;
         this.whitelistManager = whitelistManager;
         this.databaseManager = databaseManager;
+        this.sessionRegistry = sessionRegistry;
     }
 
     /**
@@ -307,12 +312,28 @@ public final class PlayerLoginListener {
                 .replace("&", "§");
     }
 
+    /**
+     * 解析玩家的真实来源 IP, 供审计日志使用。
+     *
+     * 玩家经 frp 中转进来时, Minecraft 看到的源地址是转发器的回环地址, 直接记录等于把整张
+     * 审计表写成 127.0.0.1。真实地址由转发器在 PROXY protocol 头里取到并登记在会话表中,
+     * 这里按来源端口取回。
+     *
+     * 只在来源是回环地址时查表: 经转发器的连接必然来自回环, 加这道判断可避免外部直连玩家的
+     * 临时端口恰好撞上某个会话端口时张冠李戴。查不到就退回 TCP 层地址 (内网直连的正常情况)。
+     */
     private String formatRemoteAddress(SocketAddress addr) {
-        if (addr instanceof InetSocketAddress inet) {
-            InetAddress address = inet.getAddress();
-            return address != null ? address.getHostAddress() : inet.getHostString();
+        if (!(addr instanceof InetSocketAddress inet)) {
+            return addr != null ? addr.toString() : "unknown";
         }
-        return addr != null ? addr.toString() : "unknown";
+        InetAddress address = inet.getAddress();
+        if (sessionRegistry != null && address != null && address.isLoopbackAddress()) {
+            NodeSession session = sessionRegistry.findByUpstreamPort(inet.getPort());
+            if (session != null && session.clientIp() != null) {
+                return session.clientIp();
+            }
+        }
+        return address != null ? address.getHostAddress() : inet.getHostString();
     }
 
     /**

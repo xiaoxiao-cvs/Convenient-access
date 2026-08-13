@@ -21,6 +21,7 @@ AccessHub 通过内置 Jetty 暴露一套 RESTful API，用于管理 Minecraft 1
 - [玩家数据查询 API](#玩家数据查询-api)
 - [服务器监控 API](#服务器监控-api)
 - [物品图标 API](#物品图标-api)
+- [线路接入 API](#线路接入-api)
 - [UUID 自动补充机制](#uuid-自动补充机制)
 - [错误代码说明](#错误代码说明)
 
@@ -65,11 +66,12 @@ lock-duration-minutes = 15
 
 #### 1. 公开端点（无需任何凭据）
 
-**只有以下三个**，其余端点一律需要凭据：
+**只有以下四个**，其余端点一律需要凭据：
 
 - `POST /api/v1/admin/login`
 - `POST /api/v1/admin/register`
 - `GET /api/v1/item-icon`（`<img>` 标签无法携带自定义请求头，故必须公开）
+- `GET /api/v1/net/nodes`（面向玩家的线路自查页面匿名访问；只输出各线路人数与连接地址，不含玩家名单与客户端 IP）
 
 #### 2. API 令牌端点（`X-API-Key`）
 
@@ -153,6 +155,7 @@ HTTP 状态码 401。
 | `/api/v1/server/players` | GET | 获取在线玩家列表 | X-API-Key 或 JWT |
 | `/api/v1/server/performance` | GET | 获取服务器性能数据（Spark + JVM） | X-API-Key 或 JWT |
 | `/api/v1/item-icon` | GET | 按物品 id 返回贴图 PNG（`?id=ns:path`） | 无（公开） |
+| `/api/v1/net/nodes` | GET | 各接入线路的实时人数与连接地址 | 无（公开） |
 
 > **已不存在的端点**：`/api/v1/health`、`/api/v1/server/info`、`/api/v1/server/status`、`/api/v1/players/online`、`/api/v1/players/list`、`/api/v1/worlds/list`、`/api/v1/system/resources`、`/api/v1/register` 在当前实现中均无路由分支，请求会返回 404。在线玩家列表请改用 `/api/v1/server/players`。
 
@@ -1182,6 +1185,110 @@ curl -H "X-API-Key: sk-your-api-token-here" \
 ```
 
 命中结果与未命中结果都会按 id 缓存在内存中，避免重复扫描 jar。
+
+## 线路接入 API
+
+### `GET /api/v1/net/nodes`
+
+返回各接入线路（frp 中转与家宽直连）的实时在线人数与连接地址，供面向玩家的线路自查页面使用。
+
+**公开端点**，无需任何凭据。响应里只有人数与地址，不含玩家名单与客户端 IP。
+
+线路归属按"玩家从哪个入口端口进来"判定：mod 内置的转发器为每条线路在本机监听一个入口端口，统一转发到 Minecraft 的真实端口，并以转发器连接 Minecraft 时占用的本地端口为键登记会话；玩家进服时按来源端口认领。这一判定不依赖玩家输入的域名，因此玩家改用 IP 直连也能正确归类。
+
+**请求**
+
+```bash
+curl http://your-server:22222/api/v1/net/nodes
+```
+
+**响应**
+
+```json
+{
+  "success": true,
+  "message": "成功获取线路状态",
+  "data": {
+    "nodes": [
+      {
+        "id": "gz",
+        "name": "阿里云广州",
+        "endpoint": "gz.mcwok.cn:25565",
+        "probeUrl": "wss://gz.mcwok.cn/probe",
+        "online": 3,
+        "connecting": 0
+      },
+      {
+        "id": "home",
+        "name": "家宽直连",
+        "endpoint": "home.mcwok.cn:25565",
+        "probeUrl": "wss://home.mcwok.cn/probe",
+        "online": 8,
+        "connecting": 1
+      }
+    ],
+    "totalOnline": 11,
+    "maxPlayers": 20,
+    "unattributed": 0,
+    "relayEnabled": true
+  }
+}
+```
+
+**字段说明**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `nodes[].id` | string | 线路标识，与配置中的 `network.nodes[].id` 对应 |
+| `nodes[].name` | string | 展示名 |
+| `nodes[].endpoint` | string | 给玩家填进游戏客户端的地址 |
+| `nodes[].probeUrl` | string | WebSocket 延迟探针地址；空串表示该线路不做延迟探测 |
+| `nodes[].online` | int | 当前经这条线在玩的人数 |
+| `nodes[].connecting` | int | 已连上但尚未进入游戏的连接数。除正在登录的玩家外，还包含客户端刷新服务器列表产生的短连接，因此有秒级抖动，仅供参考 |
+| `totalOnline` | int | 全服在线人数 |
+| `maxPlayers` | int | 服务器人数上限 |
+| `unattributed` | int | 未经转发器直连进来的玩家数，通常是内网直连 |
+| `relayEnabled` | bool | 转发器是否已启用 |
+
+未启用转发器（`network.enabled = false`）时，`nodes` 仍按配置原样返回，但所有 `online` 与 `connecting` 恒为 0，且 `relayEnabled` 为 `false`。
+
+### 延迟探针协议
+
+探针不是 HTTP 端点，而是独立监听的 WebSocket 服务（默认 `127.0.0.1:25610`，经 nginx 或 Caddy 终结 TLS 后以 `wss://<线路域名>/probe` 对外）。
+
+探针必须部署在 Minecraft 所在的那台机器上，并经由与游戏流量完全相同的 frp 隧道暴露。若把探针放在 frps 一侧，测到的只是"玩家到中转节点"的半程，隧道抖动与家宽状况一概测不出来，数据反而会误导玩家选错线路。
+
+协议只做回显：客户端发送文本帧，服务端原样发回。客户端把发送时刻编进消息，收回后相减即为往返耗时。服务端既不解析消息内容也不追加时间戳，以保证测出来的是纯网络往返而非服务端处理耗时。
+
+约束：
+
+- 帧载荷上限 1024 字节
+- 不支持分片帧与二进制帧
+- 客户端帧必须按 RFC 6455 掩码（浏览器原生 `WebSocket` 自动满足）
+- 建立连接后 10 秒内未完成升级握手会被回收
+
+**相关配置**（`config/Shinoyuki-Optimize/shinoyuki_accesshub/common.toml`）
+
+```toml
+[network]
+enabled = false          # 转发器总开关, 需先配好 frp 与 DNS 再开启
+bind-host = "0.0.0.0"    # 线路入口监听地址
+minecraft-port = 25565   # 转发目标, 须与 server.properties 的 server-port 一致
+
+[network.probe]
+enabled = false
+bind-host = "127.0.0.1"  # 对外一律经反代终结 TLS, 探针本身不直接暴露
+port = 25610
+
+[[network.nodes]]
+id = "gz"
+display-name = "阿里云广州"
+listen-port = 25601      # 须与 frpc 配置里该线路 proxy 的 localPort 一致
+endpoint = "gz.mcwok.cn:25565"
+probe-url = "wss://gz.mcwok.cn/probe"
+```
+
+完整的 frp、nginx、证书与 DNS 部署配置见 `deploy/network/`。
 
 ## UUID 自动补充机制
 

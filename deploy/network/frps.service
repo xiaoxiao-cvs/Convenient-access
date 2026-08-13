@@ -1,0 +1,52 @@
+# frps 服务端 systemd unit（节点机 gz / sz 通用）
+#
+# 部署:
+#   cp frps.service /etc/systemd/system/frps.service
+#   systemctl daemon-reload
+#   systemctl enable --now frps
+#
+# 前置: 二进制在 /usr/local/bin/frps，配置在 /etc/frp/frps.toml，
+#       日志目录 /var/log/frp 已创建且属主为 frp 用户。
+
+[Unit]
+Description=frp server (frps)
+Documentation=https://github.com/fatedier/frp
+# network-online 而不是 network: frps 要 bind 到具体地址，
+# 网卡只是 up 但还没拿到 IP 时启动会 bind 失败。
+After=network-online.target
+Wants=network-online.target
+# 默认 5 次/10 秒的重启上限会让节点抖动引发的连环重启把服务打进 failed 状态
+# 再也不自动拉起。置 0 关掉这个限制，让它无限重试。
+# 这两个键必须写在 [Unit] 而不是 [Service]（systemd 229 起迁移到 [Unit]）。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.toml
+
+# 专用低权限账户。创建:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin frp
+#   mkdir -p /var/log/frp && chown frp:frp /var/log/frp
+# 规划的端口全部 > 1024，所以不需要 CAP_NET_BIND_SERVICE。
+User=frp
+Group=frp
+
+Restart=always
+RestartSec=5s
+
+# 每个玩家连接 + 连接池 + 探针都是 fd，默认 1024 在人多时会 EMFILE。
+LimitNOFILE=1048576
+
+# ---- 加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# ProtectSystem=strict 把整个文件系统挂成只读，日志要单独开写权限。
+ReadWritePaths=/var/log/frp
+
+[Install]
+WantedBy=multi-user.target

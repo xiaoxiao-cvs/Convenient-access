@@ -2,6 +2,8 @@ package com.shinoyuki.accesshub.config;
 
 import java.util.List;
 
+import com.shinoyuki.accesshub.net.NodeDefinition;
+
 /**
  * 配置访问接口。
  *
@@ -77,6 +79,17 @@ public interface AccessHubConfig {
     String getBackupSchedule();      // "天:小时:分钟", 如 "0:2:0" = 每天 02:00
     int getBackupRetentionDays();
     boolean isBackupCompress();
+
+    // 多线路接入 (frp 中转 + 家宽直连)
+    boolean isNetworkRelayEnabled();
+    String getRelayBindHost();
+    int getMinecraftPort();          // 转发目标, 即 server.properties 里的 server-port
+    List<NodeDefinition> getNodes();
+
+    // 线路延迟探针 (WebSocket 回显)
+    boolean isProbeEnabled();
+    String getProbeBindHost();
+    int getProbePort();
 
     // 日志
     boolean isLogRequests();

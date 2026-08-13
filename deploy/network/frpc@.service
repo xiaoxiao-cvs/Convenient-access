@@ -1,0 +1,58 @@
+# frpc 客户端 systemd template unit（家里的 Minecraft 主机，Linux 情形）
+#
+# 一个 frpc 进程只能连一个 frps，gz 和 sz 两条线路必须是两个进程。
+# 用 template unit（文件名带 @）避免写两份几乎一样的 unit:
+# 实例名 %i 直接对应配置文件名，frpc@gz 读 /etc/frp/frpc-gz.toml。
+#
+# 部署:
+#   cp frpc@.service /etc/systemd/system/frpc@.service
+#   cp frpc-gz.toml /etc/frp/frpc-gz.toml
+#   cp frpc-sz.toml /etc/frp/frpc-sz.toml
+#   systemctl daemon-reload
+#   systemctl enable --now frpc@gz frpc@sz
+#
+# 查看单条线路:
+#   systemctl status frpc@gz
+#   journalctl -u frpc@sz -f
+
+[Unit]
+Description=frp client (frpc) 实例 %i
+Documentation=https://github.com/fatedier/frp
+After=network-online.target
+Wants=network-online.target
+# 家宽拨号中断会连续触发重启，默认 5 次/10 秒的上限会让 frpc 被永久放弃。
+# 这两个键必须写在 [Unit] 而不是 [Service]（systemd 229 起迁移到 [Unit]）。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frpc -c /etc/frp/frpc-%i.toml
+# frpc reload 是热加载，改 proxy 配置不会踢掉在线玩家；
+# 重启进程会断开所有隧道连接。所以 reload 一定要走这个而不是 restart。
+ExecReload=/usr/local/bin/frpc reload -c /etc/frp/frpc-%i.toml
+
+User=frp
+Group=frp
+
+Restart=always
+# 比 frps 长一些: 家宽拨号重连、DDNS 切换期间会连续失败，
+# 5 秒重试只会把日志刷满，10 秒足够等网络回来。
+RestartSec=10s
+
+LimitNOFILE=1048576
+
+# ---- 加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# frpc 配置里 log.to 是相对路径 ./frpc-%i.log，配合 WorkingDirectory
+# 落到这个目录；ProtectSystem=strict 下必须显式放开写权限。
+WorkingDirectory=/var/log/frp
+ReadWritePaths=/var/log/frp
+
+[Install]
+WantedBy=multi-user.target

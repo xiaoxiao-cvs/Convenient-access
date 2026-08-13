@@ -24,13 +24,14 @@ public class ApiRouter extends HttpServlet {
     private final PlayerDataHandler playerDataController;
     private final ServerInfoHandler serverInfoHandler;
     private final ItemIconHandler itemIconHandler;
+    private final NetworkInfoHandler networkInfoHandler;
     private final OperationLogApiController operationLogController;
     private AdminAuthController adminAuthController;
     private final AccessHubConfig configManager;
 
     public ApiRouter(WhitelistApiController whitelistController, UserApiController userController,
                      PlayerDataHandler playerDataController, ServerInfoHandler serverInfoHandler,
-                     ItemIconHandler itemIconHandler,
+                     ItemIconHandler itemIconHandler, NetworkInfoHandler networkInfoHandler,
                      OperationLogApiController operationLogController,
                      AdminAuthController adminAuthController, AccessHubConfig configManager) {
         this.whitelistController = whitelistController;
@@ -38,6 +39,7 @@ public class ApiRouter extends HttpServlet {
         this.playerDataController = playerDataController;
         this.serverInfoHandler = serverInfoHandler;
         this.itemIconHandler = itemIconHandler;
+        this.networkInfoHandler = networkInfoHandler;
         this.operationLogController = operationLogController;
         this.adminAuthController = adminAuthController;
         this.configManager = configManager;
@@ -106,7 +108,10 @@ public class ApiRouter extends HttpServlet {
         return path.equals("/api/v1/admin/login") ||
                path.equals("/api/v1/admin/register") ||
                // 物品图标必须公开: <img> 标签无法携带 Authorization/X-API-Key 头
-               path.equals("/api/v1/item-icon");
+               path.equals("/api/v1/item-icon") ||
+               // 线路状态供玩家自查页面匿名访问; 该端点只输出各线路人数与连接地址,
+               // 不含玩家名单与客户端 IP, 公开无隐私风险
+               path.equals("/api/v1/net/nodes");
     }
 
     /**
@@ -213,6 +218,14 @@ public class ApiRouter extends HttpServlet {
                     serverInfoHandler.handleGetPlayers(request, response);
                 } else {
                     send503Response(response, "Server info handler not available");
+                }
+            }
+            // 线路状态路由 (公开, 各 frp/直连线路的实时人数)
+            else if (path.equals("/api/v1/net/nodes")) {
+                if (networkInfoHandler != null) {
+                    networkInfoHandler.handleGetNodes(request, response);
+                } else {
+                    send503Response(response, "Network info handler not available");
                 }
             }
             // 物品图标路由 (公开, 从 mod jar 抽贴图 PNG)

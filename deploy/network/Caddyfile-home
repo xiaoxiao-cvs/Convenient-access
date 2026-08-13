@@ -1,0 +1,107 @@
+# Caddy 反向代理 —— 家宽直连线路的 WebSocket 探针 TLS 终结
+#
+# ============================================================================
+# 家宽直连线路，最后接入
+# ============================================================================
+# home 这条线不经过任何云节点，所以 https://home.mcwok.cn/probe 的 TLS
+# 必须在家里这台机器上终结。gz / sz 两条线的探针由节点上的 nginx 处理
+# （见 nginx-probe.conf），本文件只管 home 这一条。
+#
+# 部署路径: Linux 为 /etc/caddy/Caddyfile。
+# Windows 上 Caddy 自带 `caddy run` 前台运行，注册成服务用 nssm 包装即可，
+# 方式与 README.md 第九节里包装 frpc 的做法完全一致，只是把 exe 和参数换掉:
+#   nssm install caddy "C:\caddy\caddy.exe" "run" "--config" "C:\caddy\Caddyfile"
+#
+# 数据路径:
+#   浏览器 --wss--> 家里:443 Caddy --http/1.1--> 家里:127.0.0.1:25610（mod 内置探针）
+#
+# ============================================================================
+# 为什么推荐 Caddy 而不是 nginx
+# ============================================================================
+# 1. Caddy 的 reverse_proxy 原生支持 WebSocket，自动完成 Upgrade 握手并转成
+#    双向隧道，不需要像 nginx 那样手写 proxy_http_version / Upgrade /
+#    Connection 三件套 —— 那三行少任何一行 WS 握手都会失败。
+# 2. Caddy 内建 ACME，证书签发和续期都是它自己管，不需要额外的 acme.sh +
+#    cron/timer + reloadcmd 这一整套外部装置。
+# 3. 家宽 80 端口通常被运营商封，HTTP-01 走不通，必须用 DNS-01 ——
+#    这一点和云节点完全相同。配上 dnspod 插件后 Caddy 直接走 DNS-01。
+# 不想引入 Caddy 的话，用 nginx-probe-home.conf 那份备选配置。
+# ============================================================================
+#
+# ---- 前置: 必须自行编译带 dnspod 插件的 Caddy ----
+# 官方发行版不含任何 DNS 插件，直接用会因为找不到 dnspod 模块而启动失败。
+#   xcaddy build --with github.com/caddy-dns/dnspod
+# 或到 https://caddyserver.com/download 勾选 dnspod 后下载定制版。
+#
+# ---- 前置: 环境变量 ----
+# DNSPOD_TOKEN 的格式是 "ID,Token" 两段用逗号拼接，
+# 即 ddns-dnspod.sh 里 DP_Id 和 DP_Key 的组合，与 DNSPod API 的
+# login_token 是同一个东西。
+#   Linux: 写进 /etc/default/caddy 或 systemd 的 EnvironmentFile
+#     DNSPOD_TOKEN=<DNSPOD_API_ID>,<DNSPOD_API_TOKEN>
+# 不要把明文 token 直接写进本文件, Caddyfile 通常是 644 权限。
+
+{
+	# 占位符: 换成真实可收信的邮箱，证书出问题时 CA 会发通知。
+	email <YOUR_EMAIL>
+
+	# 家宽 80 端口被运营商封，对外根本收不到 HTTP 请求，
+	# 这个跳转监听毫无意义；而且家里 80 端口常被路由器管理页或其它服务占用，
+	# 占用时会导致 Caddy 整个启动失败。直接关掉。
+	auto_https disable_redirects
+}
+
+home.mcwok.cn {
+	tls {
+		# 指定 dns 提供商后 Caddy 只用 DNS-01，不会再尝试 HTTP-01/TLS-ALPN。
+		dns dnspod {env.DNSPOD_TOKEN}
+
+		# 用公共 DNS 做 TXT 记录的生效检查。家宽默认的运营商 DNS 常有激进缓存，
+		# 会一直查到旧的 TXT 值导致校验超时。
+		resolvers 119.29.29.29 223.5.5.5
+
+		# DNSPod 写入到全网可查通常几十秒，给足余量再开始轮询，
+		# 避免抢跑查到空结果就判失败。
+		propagation_delay 30s
+		propagation_timeout 5m
+	}
+
+	# 探针只暴露 /probe 这一个路径。用 handle 而不是 route:
+	# handle 之间互斥，第一个匹配上就不再往下走，语义比 route 更清晰。
+	handle /probe* {
+		reverse_proxy 127.0.0.1:25610 {
+			# -1 是低延迟模式，彻底关掉响应缓冲、每次写入立即 flush。
+			# 不加的话 Caddy 会攒包，把测出来的延迟做脏 —— 探针的唯一职责
+			# 就是量延迟，缓冲在这里是纯粹的有害行为。
+			flush_interval -1
+		}
+	}
+
+	# 其余路径一律 404，不把这台机器当通用入口暴露出去。
+	handle {
+		respond 404
+	}
+}
+
+# ============================================================================
+# 部署与验证
+# ============================================================================
+#
+# ---- Linux ----
+#   caddy validate --config /etc/caddy/Caddyfile
+#   systemctl enable --now caddy
+#   systemctl reload caddy      # 改配置后热加载，不断开在线连接
+#   journalctl -u caddy -f      # 首次签发会在这里刷 ACME 过程
+#
+# ---- 验证 ----
+#   curl -i --http1.1 \
+#        -H "Connection: Upgrade" -H "Upgrade: websocket" \
+#        -H "Sec-WebSocket-Version: 13" \
+#        -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+#        https://home.mcwok.cn/probe
+#   期望 HTTP/1.1 101 Switching Protocols
+#
+# ---- 路由器端口映射 ----
+# 这台机器需要映射的只有 443（本文件）和 25565->25603（Minecraft 直连入口）。
+# 25601 / 25602 / 25565 绝对不能映射，理由见 README.md 第八节的红线表格。
+# ============================================================================

@@ -11,8 +11,10 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.electronwill.nightconfig.core.Config;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.toml.TomlFormat;
+import com.shinoyuki.accesshub.net.NodeDefinition;
 
 /**
  * AccessHubConfig 的 Night Config TOML 实现.
@@ -138,10 +140,55 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("backup.compress", true);
         config.setComment("backup.compress", " 是否压缩备份为 ZIP");
 
+        // 默认关闭: 本功能会额外占用若干端口并改变玩家进服的网络路径, 必须等 frp 与 DNS 都配好
+        // 之后再手动开启。装上新版本就自动接管网络会让原本正常的服务器直接失联。
+        config.set("network.enabled", false);
+        config.setComment("network.enabled",
+                " 多线路接入转发器. 开启后各线路入口端口的流量统一转发到 minecraft-port,\n"
+                        + " 并按入口端口统计每条线路的在线人数. 需先配好 frp 与 DNS 再开启");
+        config.set("network.bind-host", "0.0.0.0");
+        config.setComment("network.bind-host",
+                " 线路入口监听地址. 家宽直连线路需要从公网可达故须为 0.0.0.0;\n"
+                        + " 注意 frp 线路的入口端口不要在路由器上做端口映射, 只有直连线路的端口才映射");
+        config.set("network.minecraft-port", 25565);
+        config.setComment("network.minecraft-port",
+                " 转发目标端口, 须与 server.properties 的 server-port 一致.\n"
+                        + " 该端口不应直接暴露到公网, 否则玩家绕过转发器后线路统计会漏人");
+
+        config.set("network.probe.enabled", false);
+        config.setComment("network.probe.enabled",
+                " 线路延迟探针 (WebSocket 回显), 供玩家自查页面测量各线路往返延迟与抖动");
+        config.set("network.probe.bind-host", "127.0.0.1");
+        config.setComment("network.probe.bind-host",
+                " 探针监听地址. 保持回环即可: 对外一律经由 nginx/Caddy 终结 TLS 后反代进来,\n"
+                        + " 直接暴露探针端口等于把一个无鉴权的回显服务挂在公网上");
+        config.set("network.probe.port", 25610);
+
+        config.set("network.nodes", new ArrayList<>(List.of(
+                defaultNode("gz", "阿里云广州", 25601, "gz.mcwok.cn:25565", "wss://gz.mcwok.cn/probe"),
+                defaultNode("sz", "腾讯云深圳", 25602, "sz.mcwok.cn:25565", "wss://sz.mcwok.cn/probe"),
+                defaultNode("home", "家宽直连", 25603, "home.mcwok.cn:25565", "wss://home.mcwok.cn/probe")
+        )));
+        config.setComment("network.nodes",
+                " 线路定义. listen-port 是本机入口端口, 须与 frpc 配置里该线路 proxy 的 localPort 对应;\n"
+                        + " endpoint 是给玩家填进游戏客户端的地址; probe-url 留空表示这条线不做延迟探测");
+
         config.set("logging.log-requests", false);
         config.set("logging.debug", false);
 
         config.save();
+    }
+
+    /** 构造一条默认线路。用 in-memory Config 而非字符串拼接, 让 Night Config 写出标准的 TOML 数组表。 */
+    private static Config defaultNode(String id, String displayName, int listenPort,
+                                      String endpoint, String probeUrl) {
+        Config entry = Config.inMemory();
+        entry.set("id", id);
+        entry.set("display-name", displayName);
+        entry.set("listen-port", listenPort);
+        entry.set("endpoint", endpoint);
+        entry.set("probe-url", probeUrl);
+        return entry;
     }
 
     /**
@@ -265,6 +312,36 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     @Override public String  getBackupSchedule()     { return config.getOrElse("backup.schedule", "0:2:0"); }
     @Override public int     getBackupRetentionDays(){ return config.getIntOrElse("backup.retention-days", 7); }
     @Override public boolean isBackupCompress()      { return config.getOrElse("backup.compress", true); }
+
+    @Override public boolean isNetworkRelayEnabled() { return config.getOrElse("network.enabled", false); }
+    @Override public String  getRelayBindHost()      { return config.getOrElse("network.bind-host", "0.0.0.0"); }
+    @Override public int     getMinecraftPort()      { return config.getIntOrElse("network.minecraft-port", 25565); }
+
+    /**
+     * 读取线路定义。字段缺失或端口非法时由 {@link NodeDefinition} 的构造校验抛出, 不做静默兜底 —
+     * 一条线路配错意味着那条线的玩家全部连不上, 必须在启动日志里立刻暴露, 而不是等玩家来报障。
+     */
+    @Override
+    public List<NodeDefinition> getNodes() {
+        List<Config> raw = config.get("network.nodes");
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<NodeDefinition> result = new ArrayList<>(raw.size());
+        for (Config entry : raw) {
+            result.add(new NodeDefinition(
+                    entry.getOrElse("id", ""),
+                    entry.getOrElse("display-name", ""),
+                    entry.getIntOrElse("listen-port", 0),
+                    entry.getOrElse("endpoint", ""),
+                    entry.getOrElse("probe-url", "")));
+        }
+        return result;
+    }
+
+    @Override public boolean isProbeEnabled()   { return config.getOrElse("network.probe.enabled", false); }
+    @Override public String  getProbeBindHost() { return config.getOrElse("network.probe.bind-host", "127.0.0.1"); }
+    @Override public int     getProbePort()     { return config.getIntOrElse("network.probe.port", 25610); }
 
     @Override public boolean isLogRequests() { return config.getOrElse("logging.log-requests", false); }
     @Override public boolean isDebug()       { return config.getOrElse("logging.debug", false); }

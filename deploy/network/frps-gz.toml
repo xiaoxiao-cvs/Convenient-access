@@ -1,0 +1,54 @@
+# frps 服务端配置 —— 节点 gz（阿里云广州，公网 8.148.217.146）
+#
+# 适用版本: frp v0.52 及以上的 TOML 格式（本文件按 v0.70.1 的字段名编写）。
+# v0.52 从 ini 迁移到 toml 时字段名做过整体重命名（server_addr -> serverAddr、
+# proxy_protocol_version -> transport.proxyProtocolVersion 等），
+# 拿旧版 ini 的字段名往这里抄会直接启动失败。
+#
+# 部署路径: /etc/frp/frps.toml
+
+bindAddr = "0.0.0.0"
+bindPort = 7000
+
+auth.method = "token"
+# 占位符: 替换成真实 token。生成方式见 README.md「token 生成」一节。
+# 同一节点的 frps 与 frpc 必须填完全相同的值。
+auth.token = "<FRP_TOKEN>"
+
+# 强制 frpc 必须用 TLS 接入。frpc 从 v0.50 起默认就开 TLS，
+# 这里加 force 是为了让"忘记开 TLS 的客户端"直接连不上而不是静默降级成明文。
+transport.tls.force = true
+
+# 连接池: frpc 预先建好若干条到 frps 的工作连接，玩家握手时直接复用，
+# 省掉一次跨省 TCP 建连的 RTT。frpc 侧的 transport.poolCount 不得超过这个上限。
+transport.maxPoolCount = 10
+
+# allowPorts 白名单: frpc 凭 token 登录后本可申请任意 remotePort，
+# 一旦 token 泄露，节点会被当成免费跳板机（挖矿代理、扫描源）。
+# 这里锁死到规划内的两个端口，超出范围的 proxy 会被 frps 拒绝。
+allowPorts = [
+  { single = 25565 },
+  { single = 25610 },
+]
+
+# 本节点只服务一个 frpc 实例、两个 proxy，多申请一定是异常。
+maxPortsPerClient = 2
+
+# 关掉给客户端的详细错误回显: 出错信息会原样发回连接方，
+# 公网上任何人都能连 25565，不必让他们看到服务端内部错误。
+detailedErrorsToClient = false
+
+# dashboard 只监听回环。frp 的 dashboard 没有防爆破，
+# 暴露到公网等于把 token 和全部 proxy 拓扑挂出去。
+# 要看面板走 SSH 隧道: ssh -L 7500:127.0.0.1:7500 root@8.148.217.146
+webServer.addr = "127.0.0.1"
+webServer.port = 7500
+webServer.user = "admin"
+# 占位符: 替换成真实密码。
+webServer.password = "<FRP_DASHBOARD_PASSWORD>"
+
+log.to = "/var/log/frp/frps.log"
+log.level = "info"
+log.maxDays = 7
+# 日志落文件时 ANSI 颜色码会变成乱码，影响 grep 和 journalctl 检索。
+log.disablePrintColor = true
