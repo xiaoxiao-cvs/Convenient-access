@@ -20,20 +20,39 @@
 - 六个 `frpc-multi@<线路>` 实例已启用，**六条 frp 线路实测均可进服**
 - `GET /api/v1/net/nodes` 已可用，七条线路均返回
 
-- **五个节点的 wss 探针已上线**：hangzhou1 / shenzhen / hangzhou2 / wuhan / guangzhou
-  均已签发 Let's Encrypt 证书并部署反代，实测 `https://<线路域名>/probe` 返回
-  101 Switching Protocols。续期钩子已装（`renewal-hooks/deploy/reload-nginx.sh`），
-  否则证书换了 nginx 还在用内存里的旧证书
+- **六个节点的 wss 探针全部上线**，实测均返回 101 Switching Protocols。
+  五个走标准 443；**shanghai 例外，走 8443** —— 那台的 80/443 属于 WB_APP 业务隧道，
+  不能占用，详见下方「shanghai 的特殊处理」
+- **玩家自查页面已上线**：https://panel.mcwok.cn/network （公开路由，无需登录）
+- **线路归属统计实测有效**：曾观测到一名玩家经广州线进服，统计端点如实归到
+  `guangzhou online=1`、`unattributed=0`，转发器到会话认领这一整条链路已被端到端验证
 
 未完成：
 
-- **shanghai 的探针无法部署**：该节点的 80 与 443 被 frps 的 tcp proxy 占着
-  （转发着某个前端应用），nginx 起不来，HTTP-01 校验也拿不到 80 端口。三条出路：
-  让出 80/443、探针改用非标准端口 + DNS-01 签发、或这条线不做延迟探测
 - **xiamen（家宽直连）**：路由器端口映射尚未配置，该线不可用。需要
   TCP 25565 → `192.168.10.200:25607`，以及 TCP 443 → 家里反代
-- **玩家自查页面**：尚未部署到面板
 - 武汉、广州的安全组仍放行着 TCP 25610，建议收掉（探针不应直接暴露公网）
+
+### shanghai 的特殊处理与证书续期风险
+
+这台的 80/443 被 frps 的 tcp proxy 占着（`WB_APP_http` / `WB_APP_https`，转发家里某台机器上
+的 nginx），是独立业务，不能动。由此带来两处偏离：
+
+1. **探针挂在 8443**，`probe-url` 是 `wss://shanghai.mcwok.cn:8443/probe`，安全组需单独放行
+   TCP 8443。本机 nginx 的 Ubuntu 默认站点必须禁用（`rm /etc/nginx/sites-enabled/default`），
+   否则它要监听 80 会和 frps 抢端口导致 nginx 起不来。
+2. **证书是手工 DNS-01 签的**（2026-08-14，有效期至 11-12，acme.sh 按 ARI 定在 **10-12 续期**）。
+
+> **10-12 那次自动续期一定会失败。** `mcwok.cn` 的解析在另一个阿里云账号下，本机的 acme.sh
+> 没有能写它 TXT 记录的凭据。届时要么再手工加一次 `_acme-challenge.shanghai` 的 TXT，
+> 要么提前拿到持有该域名那个账号的 AccessKey 配上 `dns_ali` 让续期全自动。
+> 不处理的话上海线的测速会在 11-12 证书过期后静默失效。
+
+其余五个节点走 HTTP-01，`certbot.timer` 自动续期，无此问题。
+
+改 `probe-url` 一类的纯配置项**不需要重启服务器**：改完 `common.toml` 执行
+`accesshub reload` 即可，该命令可经 RCON 发送（端口见 server.properties）。
+只有转发器的端口绑定是启动时完成的，增删线路或改 `listen-port` 才需要重启。
 
 部署探针时踩到的两个坑，已写进 `nginx-probe.conf` 的注释：`http2 on;` 是 nginx 1.25.1
 起的语法而这些机器是 1.24，会拒绝整份配置；map 变量名不带命名空间会与节点上已有的
