@@ -20,13 +20,25 @@
 - 六个 `frpc-multi@<线路>` 实例已启用，**六条 frp 线路实测均可进服**
 - `GET /api/v1/net/nodes` 已可用，七条线路均返回
 
+- **五个节点的 wss 探针已上线**：hangzhou1 / shenzhen / hangzhou2 / wuhan / guangzhou
+  均已签发 Let's Encrypt 证书并部署反代，实测 `https://<线路域名>/probe` 返回
+  101 Switching Protocols。续期钩子已装（`renewal-hooks/deploy/reload-nginx.sh`），
+  否则证书换了 nginx 还在用内存里的旧证书
+
 未完成：
 
+- **shanghai 的探针无法部署**：该节点的 80 与 443 被 frps 的 tcp proxy 占着
+  （转发着某个前端应用），nginx 起不来，HTTP-01 校验也拿不到 80 端口。三条出路：
+  让出 80/443、探针改用非标准端口 + DNS-01 签发、或这条线不做延迟探测
 - **xiamen（家宽直连）**：路由器端口映射尚未配置，该线不可用。需要
   TCP 25565 → `192.168.10.200:25607`，以及 TCP 443 → 家里反代
-- **探针的 nginx 反代与证书**：六个节点均未部署，自查页面暂时测不到延迟
 - **玩家自查页面**：尚未部署到面板
 - 武汉、广州的安全组仍放行着 TCP 25610，建议收掉（探针不应直接暴露公网）
+
+部署探针时踩到的两个坑，已写进 `nginx-probe.conf` 的注释：`http2 on;` 是 nginx 1.25.1
+起的语法而这些机器是 1.24，会拒绝整份配置；map 变量名不带命名空间会与节点上已有的
+站点撞车导致 nginx 拒绝启动。另外证书要用 `certbot --webroot` 而非 `--standalone`，
+后者独占 80 会打断节点上跑着的其它站点。
 
 一个升级已有服务器时必踩的坑：`populateDefaults()` 只在 common.toml **不存在**时才写入默认值，
 所以给跑了很久的服务器换上 0.3.0 的 jar，`network.*` 那些键根本不会出现在配置文件里，
