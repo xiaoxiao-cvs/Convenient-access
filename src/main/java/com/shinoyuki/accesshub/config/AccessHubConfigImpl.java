@@ -165,13 +165,18 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("network.probe.port", 25610);
 
         config.set("network.nodes", new ArrayList<>(List.of(
-                defaultNode("gz", "阿里云广州", 25601, "gz.mcwok.cn:25565", "wss://gz.mcwok.cn/probe"),
-                defaultNode("sz", "腾讯云深圳", 25602, "sz.mcwok.cn:25565", "wss://sz.mcwok.cn/probe"),
-                defaultNode("home", "家宽直连", 25603, "home.mcwok.cn:25565", "wss://home.mcwok.cn/probe")
+                defaultNode("hz1", "杭州一线", 25601, "hz1.mcwok.cn:25565", "wss://hz1.mcwok.cn/probe"),
+                defaultNode("sz", "深圳线", 25602, "sz.mcwok.cn:25565", "wss://sz.mcwok.cn/probe"),
+                defaultNode("home", "家宽直连", 25603, "home.mcwok.cn:25565", "wss://home.mcwok.cn/probe"),
+                defaultNode("wh", "武汉线", 25604, "wh.mcwok.cn:25565", "wss://wh.mcwok.cn/probe"),
+                defaultNode("gz", "广州线", 25605, "gz.mcwok.cn:25565", "wss://gz.mcwok.cn/probe"),
+                defaultNode("hz2", "杭州二线", 25606, "hz2.mcwok.cn:25565", "wss://hz2.mcwok.cn/probe"),
+                defaultNode("sh", "上海线", 25607, "sh.mcwok.cn:25565", "wss://sh.mcwok.cn/probe")
         )));
         config.setComment("network.nodes",
                 " 线路定义. listen-port 是本机入口端口, 须与 frpc 配置里该线路 proxy 的 localPort 对应;\n"
-                        + " endpoint 是给玩家填进游戏客户端的地址; probe-url 留空表示这条线不做延迟探测");
+                        + " endpoint 是给玩家填进游戏客户端的地址; probe-url 留空表示这条线不做延迟探测.\n"
+                        + " 删掉整个 [[network.nodes]] 块即可下线一条线路, 无需改动其它线路");
 
         config.set("logging.log-requests", false);
         config.set("logging.debug", false);

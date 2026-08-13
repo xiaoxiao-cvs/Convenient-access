@@ -1,0 +1,90 @@
+# frpc 配置模板 —— 每条 frp 线路一份
+#
+# 一个 frpc 进程只能连接一个 frps，所以家里要为每条线路跑一个独立实例，
+# 各吃一份从本模板派生的配置文件。占位符对照 README.md 第二节的节点参数表填写。
+#
+# 需要替换的占位符:
+#   <NODE_ID>       线路标识，如 hz1 / wh / gz，须与 mod 配置 network.nodes 里的 id 一致
+#   <NODE_DISPLAY>  展示名，仅用于注释
+#   <SERVER_ADDR>   节点公网 IP。刻意用 IP 而不是域名: 节点 IP 是静态的，
+#                   而 DNS 一旦异常（域名过期被切 expire NS 之类）会把线路一起带下线，
+#                   隧道本身不需要域名，域名只给玩家用
+#   <SERVER_PORT>   该节点 frps 的 bindPort。注意各节点并不统一，广州那台是 48124
+#   <FRP_TOKEN>     该节点 frps 的 auth.token。各节点互不相同，必须逐台去
+#                   对应的 frps 配置里取，不要套用其它节点的值
+#   <RELAY_PORT>    转发器为这条线路独占的本机入口端口（25601 起），
+#                   须与 mod 配置里该线路的 listen-port 一致
+#   <ADMIN_PORT>    本实例的管理端口（7401 起）。多实例同机运行必须各不相同，
+#                   否则第二个实例起不来
+
+serverAddr = "<SERVER_ADDR>"
+serverPort = <SERVER_PORT>
+
+auth.method = "token"
+auth.token = "<FRP_TOKEN>"
+
+# 节点暂时不可达时不要退出进程，交给 frpc 自身无限重试。
+# 退出会让 systemd 反复拉起，日志被登录失败刷满，反而更难定位。
+loginFailExit = false
+
+transport.tls.enable = true
+
+# 预建工作连接，玩家进服时省掉一次跨省 TCP 建连的 RTT。
+# 不得超过该节点 frps 的 transport.maxPoolCount。
+transport.poolCount = 5
+
+webServer.addr = "127.0.0.1"
+webServer.port = <ADMIN_PORT>
+
+log.to = "/var/log/frp/frpc-<NODE_ID>.log"
+log.level = "info"
+log.maxDays = 7
+log.disablePrintColor = true
+
+# ---- Minecraft 主线路 ----
+[[proxies]]
+name = "mc-<NODE_ID>"
+type = "tcp"
+# frpc 与 Minecraft 服务端同机，转发器只监听本地口。
+# 若把 frpc 挪到家里另一台机器，这里要改成 MC 主机的内网地址，
+# 同时 mod 的 network.bind-host 也得能被那台机器访问到。
+localIP = "127.0.0.1"
+localPort = <RELAY_PORT>
+remotePort = 25565
+
+# 取回经隧道后丢失的玩家真实 IP。不带这个头，Minecraft 侧看到的所有玩家 IP
+# 都是回环地址，白名单审计日志会整表作废。
+#
+# 转发器不需要为此配任何开关: 它对每条新连接先探测 PROXY 头，认得出就吃掉并取回
+# 真实地址，认不出就按直连处理。所以这一项开与不开都能正常进服，区别只在审计日志。
+#
+# 线路归属不依赖这个头 —— 那是按玩家从哪个入口端口进来判定的。
+transport.proxyProtocolVersion = "v2"
+
+# 外层 transport.tls.enable 已加密整条隧道，不再叠加；
+# Minecraft 协议自身超过阈值就已 zlib 压缩，二次压缩几乎无收益只增延迟。
+transport.useEncryption = false
+transport.useCompression = false
+
+# 转发器没起来时让 frps 主动摘掉这条 proxy，
+# 玩家会立刻收到连接拒绝，而不是连上去卡在"正在登录"。
+healthCheck.type = "tcp"
+healthCheck.timeoutSeconds = 3
+healthCheck.maxFailed = 3
+healthCheck.intervalSeconds = 10
+
+# ---- 延迟探针 ----
+[[proxies]]
+name = "probe-<NODE_ID>"
+type = "tcp"
+localIP = "127.0.0.1"
+# 所有线路的探针都指向同一个本机端口: 探针服务只有一个实例，
+# 各线路的差异体现在流量走的隧道不同，而不是后端不同。
+localPort = 25610
+remotePort = 25610
+
+# 这条刻意不开 PROXY protocol。探针只实现了 WebSocket 升级握手，完全不解析 PROXY 头;
+# 一旦开启，frpc 先发的那段二进制头会被当成 HTTP 请求行读进去，永远等不到请求头结束标记，
+# 握手必然失败。探针也不需要来源 IP，它只测往返延迟。
+transport.useEncryption = false
+transport.useCompression = false
