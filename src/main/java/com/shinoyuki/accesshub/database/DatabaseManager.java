@@ -45,7 +45,7 @@ public class DatabaseManager {
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     // 数据库版本
-    private static final int CURRENT_VERSION = 7; // v7: operation_log 的 CHECK 补入 SET_ACTIVE/GENCODE
+    private static final int CURRENT_VERSION = 8; // v8: 新增 QQ Bot 绑定链路的个人识别码表与 QQ 绑定表
 
     public DatabaseManager(File dataFolder) {
         this.dataFolder = dataFolder;
@@ -173,6 +173,8 @@ public class DatabaseManager {
             "schema/player_auth.sql",
             "schema/player_registration_codes.sql",
             "schema/device_keys.sql",
+            "schema/admin_personal_codes.sql",
+            "schema/admin_qq_bindings.sql",
             "schema/indexes.sql"
         };
         

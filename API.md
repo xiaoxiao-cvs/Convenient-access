@@ -22,6 +22,7 @@ AccessHub 通过内置 Jetty 暴露一套 RESTful API，用于管理 Minecraft 1
 - [服务器监控 API](#服务器监控-api)
 - [物品图标 API](#物品图标-api)
 - [线路接入 API](#线路接入-api)
+- [识别码与 QQ 绑定 API](#识别码与-qq-绑定-api)
 - [UUID 自动补充机制](#uuid-自动补充机制)
 - [错误代码说明](#错误代码说明)
 
@@ -140,6 +141,16 @@ HTTP 状态码 401。
 | `/api/v1/admin/me` | GET | 获取当前管理员信息 | 仅管理员 JWT |
 | `/api/v1/admin/generate-token` | POST | 生成管理员注册令牌 | X-API-Key 或 JWT |
 
+### 识别码与 QQ 绑定
+
+| 端点 | 方法 | 描述 | 认证要求 |
+|------|------|------|----------|
+| `/api/v1/admin/personal-code` | GET | 查询当前管理员的识别码掩码与已绑 QQ | 仅管理员 JWT |
+| `/api/v1/admin/personal-code` | POST | 签发/重置个人识别码，明文仅此一次返回 | 仅管理员 JWT |
+| `/api/v1/bot/bind` | POST | 凭识别码把 QQ 号认领到某管理员 | X-API-Key 或 JWT |
+| `/api/v1/bot/binding` | GET | 查询某 QQ 的绑定（`?qq=`） | X-API-Key 或 JWT |
+| `/api/v1/bot/binding` | DELETE | 解除某 QQ 的绑定（`?qq=`） | X-API-Key 或 JWT |
+
 ### 操作日志
 
 | 端点 | 方法 | 描述 | 认证要求 |
@@ -154,6 +165,7 @@ HTTP 状态码 401。
 | `/api/v1/player` | GET | 获取单个玩家详细数据（`?name=玩家名`） | X-API-Key 或 JWT |
 | `/api/v1/server/players` | GET | 获取在线玩家列表 | X-API-Key 或 JWT |
 | `/api/v1/server/performance` | GET | 获取服务器性能数据（Spark + JVM） | X-API-Key 或 JWT |
+| `/api/v1/server/broadcast` | POST | 外部渠道（QQ）向游戏内公屏发言 | X-API-Key 或 JWT |
 | `/api/v1/item-icon` | GET | 按物品 id 返回贴图 PNG（`?id=ns:path`） | 无（公开） |
 | `/api/v1/net/nodes` | GET | 各接入线路的实时人数与连接地址 | 无（公开） |
 
@@ -1155,6 +1167,45 @@ curl -H "X-API-Key: sk-your-api-token-here" \
 
 **错误：** 采集超时返回 504 `获取性能数据超时`；异常返回 500。
 
+### `POST /api/v1/server/broadcast`
+
+把外部渠道（当前是 QQ 群）的一句话投到全服公屏。由 `ChatBridgeHandlerImpl` 在服务器主线程执行，3 秒超时。
+
+请求体：
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `sender` | string | 是 | 发言人展示名，最长 32 字符 |
+| `content` | string | 是 | 正文，最长 256 字符 |
+| `source` | string | 否 | 来源标签，缺省 `QQ`，最长 32 字符 |
+| `channel` | string | 否 | 频道/群名，给出时前缀渲染为 `[来源\|频道]` |
+
+四个字段都会先经 `ChatTextSanitizer` 清洗：**剥掉分节符 `§` 与全部控制字符（含换行、制表）后再按长度截断**。这是防伪装的关键——保留 `§` 意味着任何人都能把发言染成系统提示的颜色，保留换行则能撑出一段假公告。清洗后为空的字段按缺失处理。
+
+```bash
+curl -X POST "http://localhost:22222/api/v1/server/broadcast" \
+  -H "X-API-Key: sk-your-token" -H "Content-Type: application/json" \
+  -d '{"source":"QQ","channel":"世界树主群","sender":"Shinoyuki","content":"服务器十分钟后重启"}'
+```
+
+游戏内渲染为 `[QQ|世界树主群] Shinoyuki: 服务器十分钟后重启`，其中前缀灰色、发言人金色、正文白色。
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "recipients": 3,
+    "rendered": "[QQ|世界树主群] Shinoyuki: 服务器十分钟后重启"
+  },
+  "message": "已发送到公屏",
+  "code": 200
+}
+```
+
+`recipients` 为收到消息的在线玩家数，为 0 表示服务器当前无人。主线程繁忙导致 3 秒内未执行时返回 **504**。
+
 ## 物品图标 API
 
 ### `GET /api/v1/item-icon`
@@ -1289,6 +1340,118 @@ probe-url = "wss://gz.mcwok.cn/probe"
 ```
 
 完整的 frp、nginx、证书与 DNS 部署配置见 `deploy/network/`。
+
+## 识别码与 QQ 绑定 API
+
+让管理员能从 QQ 群里直接执行运维命令的一条链路：管理员在面板签发 **64 位个人识别码**，私聊 QQ 机器人发送 `#绑定 <识别码>` 把 QQ 号认领到自己的面板账号；此后该 QQ 在任意群发出的 `#加白` / `#say` 等命令，都以该管理员身份执行。
+
+设计要点：
+
+- **只存哈希**。`admin_personal_codes` 表只有 SHA-256 与前 8 / 后 4 位掩码，明文仅在签发响应里出现一次。库被拖走也拿不到可用的码。
+- **一人一码**。`admin_id` 即主键，重签直接覆盖，旧码立即失效；已建立的 QQ 绑定不受影响（绑定是既成事实，重签是为了让泄露的码作废）。
+- **一 QQ 一主**。`admin_qq_bindings.qq` 唯一，同一管理员可绑多个 QQ（大小号），但一个 QQ 不能同时属于两个管理员。
+- **停用即断通道**。查询绑定时连表带出 `admin_users.is_active`，管理员被停用后 `bound` 直接返回 false。
+
+### `GET /api/v1/admin/personal-code`
+
+查询**当前登录管理员**的识别码状态。必须携带管理员 JWT——用 X-API-Key 访问（或 `api.auth.enabled=false` 时）拿不到"我是谁"，一律返回 **401**。
+
+```json
+{
+  "success": true,
+  "data": {
+    "issued": true,
+    "codeLength": 64,
+    "prefix": "K7xQ2m8v",
+    "suffix": "9fLm",
+    "issuedAt": "2026-08-14T20:31:05.412",
+    "boundQq": ["10498851"]
+  },
+  "code": 200
+}
+```
+
+从未签发过时 `issued` 为 false，且 `prefix` / `suffix` / `issuedAt` 三个键整个缺失。
+
+### `POST /api/v1/admin/personal-code`
+
+为当前管理员签发或重置识别码。无请求体。
+
+```json
+{
+  "success": true,
+  "data": {
+    "code": "K7xQ2m8v...(共 64 位)...9fLm",
+    "codeLength": 64,
+    "message": "识别码只显示这一次, 请立即复制保存"
+  },
+  "message": "识别码已签发",
+  "code": 200
+}
+```
+
+码由 `SecureRandom` 取 48 字节经 base64url 无 padding 编码而成，恰好 64 字符，字符集 `[A-Za-z0-9_-]`。**明文不再有第二次获取机会**，丢失只能重签。
+
+### `POST /api/v1/bot/bind`
+
+凭识别码把 QQ 号认领到对应管理员。供 Bot 后台调用（`X-API-Key`）。
+
+```json
+{ "code": "K7xQ2m8v...9fLm", "qq": "10498851" }
+```
+
+| 状态码 | 含义 |
+|--------|------|
+| 200 | 绑定成功；若该 QQ 早已绑定同一管理员则 `data.alreadyBound` 为 true（幂等） |
+| 400 | 缺少参数，或 QQ 号格式非法（须 5-15 位数字且不以 0 开头） |
+| 403 | 识别码无效（不存在、格式错），或目标管理员账号已停用 |
+| 409 | 该 QQ 已绑定到**其他**管理员，需先解绑 |
+
+格式错与码不存在都回同一句"识别码无效"，避免成为探测口径。
+
+```json
+{
+  "success": true,
+  "data": {
+    "qq": "10498851",
+    "adminId": 1,
+    "adminUsername": "admin",
+    "adminDisplayName": "超级管理员",
+    "boundAt": "2026-08-14T20:35:12.008",
+    "alreadyBound": false
+  },
+  "message": "绑定成功",
+  "code": 200
+}
+```
+
+### `GET /api/v1/bot/binding?qq={qq}`
+
+查某 QQ 的绑定。Bot 在执行**每一条**运维命令前都调用它复核发令人身份，不依赖本地缓存。
+
+```json
+{
+  "success": true,
+  "data": {
+    "qq": "10498851",
+    "bound": true,
+    "adminActive": true,
+    "adminId": 1,
+    "adminUsername": "admin",
+    "adminDisplayName": "超级管理员",
+    "boundAt": "2026-08-14T20:35:12.008"
+  },
+  "code": 200
+}
+```
+
+未绑定时 `bound` 为 false 且不含管理员字段。管理员账号被停用时 `bound` 同样为 false（另附 `adminActive: false`），使调用方只看 `bound` 一个字段即可决定放行与否。
+
+### `DELETE /api/v1/bot/binding?qq={qq}`
+
+解除绑定，直接删行不留 tombstone。已解除返回 200，该 QQ 本就未绑定返回 **404**。
+
+配套的公屏发言端点见 [`POST /api/v1/server/broadcast`](#post-apiv1serverbroadcast)。
 
 ## UUID 自动补充机制
 
@@ -1608,7 +1771,7 @@ Access-Control-Max-Age: 3600
 ## 版本信息
 
 - **mod id**: `shinoyuki_accesshub`
-- **mod 版本**: 0.2.5
+- **mod 版本**: 0.3.1
 - **API 版本**: v1
 - **运行环境**: Minecraft 1.20.1 + Forge 47.4.20（`[47,)`）
 - **可选依赖**: spark（性能数据精度）

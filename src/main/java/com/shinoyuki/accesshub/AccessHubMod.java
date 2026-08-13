@@ -7,6 +7,9 @@ import java.util.List;
 import com.mojang.logging.LogUtils;
 import com.shinoyuki.accesshub.api.AdminAuthController;
 import com.shinoyuki.accesshub.api.ApiRouter;
+import com.shinoyuki.accesshub.api.BindingApiController;
+import com.shinoyuki.accesshub.api.ChatBridgeHandler;
+import com.shinoyuki.accesshub.api.ChatBridgeHandlerImpl;
 import com.shinoyuki.accesshub.api.ItemIconHandler;
 import com.shinoyuki.accesshub.api.OperationLogApiController;
 import com.shinoyuki.accesshub.api.PlayerDataHandler;
@@ -20,7 +23,9 @@ import com.shinoyuki.accesshub.auth.AdminAuthService;
 import com.shinoyuki.accesshub.auth.LoginAttemptService;
 import com.shinoyuki.accesshub.auth.PlayerAuthDao;
 import com.shinoyuki.accesshub.auth.PlayerAuthService;
+import com.shinoyuki.accesshub.auth.PersonalCodeManager;
 import com.shinoyuki.accesshub.auth.PlayerRegistrationCodeDao;
+import com.shinoyuki.accesshub.auth.QqBindingDao;
 import com.shinoyuki.accesshub.auth.RegistrationTokenManager;
 import com.shinoyuki.accesshub.backup.BackupManager;
 import com.shinoyuki.accesshub.command.AccessHubCommand;
@@ -137,6 +142,9 @@ public final class AccessHubMod {
         }
         RegistrationTokenManager tokenManager = new RegistrationTokenManager(databaseManager);
         OperationLogDao operationLogDao = new OperationLogDao(databaseManager);
+        // QQ Bot 绑定链路: 管理员在面板签发个人识别码, 私聊发给 Bot 完成 QQ 认领
+        PersonalCodeManager personalCodeManager = new PersonalCodeManager(databaseManager);
+        QqBindingDao qqBindingDao = new QqBindingDao(databaseManager);
 
         // 5. 认证服务
         LoginAttemptService loginAttempt = new LoginAttemptService(
@@ -174,6 +182,9 @@ public final class AccessHubMod {
         ServerInfoHandler serverInfoHandler = new ServerInfoHandlerImpl(server, sparkIntegration);
         // 物品图标抽取 (无状态: 仅依赖 ModList + 资源 IO, 内置 PNG 缓存)
         ItemIconHandler itemIconHandler = new ItemIconHandler();
+        // 外部渠道 (QQ #say) 投递到游戏内公屏
+        ChatBridgeHandler chatBridgeHandler = new ChatBridgeHandlerImpl(server);
+        BindingApiController bindingController = new BindingApiController(personalCodeManager, qqBindingDao);
 
         // 线路会话表. 无条件创建: 转发器未启用时它恒为空表, 查询直接返回 null,
         // 依赖方 (登录监听器/统计端点) 无需各自做 null 分支。
@@ -185,7 +196,9 @@ public final class AccessHubMod {
                 whitelistController, userController,
                 playerDataHandler, serverInfoHandler,
                 itemIconHandler, networkInfoHandler,
-                operationLogController, adminAuthController,
+                chatBridgeHandler,
+                operationLogController, bindingController,
+                adminAuthController,
                 config
         );
 

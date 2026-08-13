@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class DatabaseVersionMigrationTest {
 
-    private static final int CURRENT_VERSION = 7;
+    private static final int CURRENT_VERSION = 8;
 
     @TempDir
     File tempDir;
@@ -79,6 +79,8 @@ class DatabaseVersionMigrationTest {
         assertEquals(CURRENT_VERSION, version(db), "新库应直接为最新版本");
         assertTrue(tableExists(db, "player_registration_codes"), "新库应建出注册码表");
         assertTrue(columnExists(db, "whitelist", "qq"), "新库 whitelist 应含 qq 列");
+        assertTrue(tableExists(db, "admin_personal_codes"), "新库应建出个人识别码表");
+        assertTrue(tableExists(db, "admin_qq_bindings"), "新库应建出 QQ 绑定表");
         db.shutdown();
     }
 
@@ -119,6 +121,8 @@ class DatabaseVersionMigrationTest {
         assertEquals(CURRENT_VERSION, version(db), "应升级到最新版本");
         assertTrue(tableExists(db, "player_registration_codes"), "3->4 迁移应建出注册码表");
         assertTrue(columnExists(db, "whitelist", "qq"), "5->6 迁移应给 whitelist 加 qq 列");
+        assertTrue(tableExists(db, "admin_personal_codes"), "7->8 迁移应建出个人识别码表");
+        assertTrue(tableExists(db, "admin_qq_bindings"), "7->8 迁移应建出 QQ 绑定表");
 
         // 6->7 重建 operation_log: 既有数据必须原样迁过来, 且新类型此时应可写入
         try (Connection c = db.getConnection();

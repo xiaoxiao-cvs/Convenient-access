@@ -25,14 +25,18 @@ public class ApiRouter extends HttpServlet {
     private final ServerInfoHandler serverInfoHandler;
     private final ItemIconHandler itemIconHandler;
     private final NetworkInfoHandler networkInfoHandler;
+    private final ChatBridgeHandler chatBridgeHandler;
     private final OperationLogApiController operationLogController;
+    private final BindingApiController bindingController;
     private AdminAuthController adminAuthController;
     private final AccessHubConfig configManager;
 
     public ApiRouter(WhitelistApiController whitelistController, UserApiController userController,
                      PlayerDataHandler playerDataController, ServerInfoHandler serverInfoHandler,
                      ItemIconHandler itemIconHandler, NetworkInfoHandler networkInfoHandler,
+                     ChatBridgeHandler chatBridgeHandler,
                      OperationLogApiController operationLogController,
+                     BindingApiController bindingController,
                      AdminAuthController adminAuthController, AccessHubConfig configManager) {
         this.whitelistController = whitelistController;
         this.userController = userController;
@@ -40,7 +44,9 @@ public class ApiRouter extends HttpServlet {
         this.serverInfoHandler = serverInfoHandler;
         this.itemIconHandler = itemIconHandler;
         this.networkInfoHandler = networkInfoHandler;
+        this.chatBridgeHandler = chatBridgeHandler;
         this.operationLogController = operationLogController;
+        this.bindingController = bindingController;
         this.adminAuthController = adminAuthController;
         this.configManager = configManager;
     }
@@ -244,6 +250,14 @@ public class ApiRouter extends HttpServlet {
                     send503Response(response, "Admin authentication service not available");
                 }
             }
+            // 个人识别码状态 (仅掩码前后缀与已绑 QQ, 明文只在签发时返回一次)
+            else if (path.equals("/api/v1/admin/personal-code")) {
+                bindingController.handleGetPersonalCode(request, response);
+            }
+            // QQ 绑定查询, Bot 在执行每条运维命令前用它确认发令人身份
+            else if (path.equals("/api/v1/bot/binding")) {
+                bindingController.handleBotGetBinding(request, response);
+            }
             else {
                 send404Response(response, "API endpoint not found");
             }
@@ -305,6 +319,22 @@ public class ApiRouter extends HttpServlet {
              else if (path.equals("/api/v1/admin/generate-token")) {
                  userController.handleGenerateToken(request, response);
              }
+             // 个人识别码签发/重置, 明文仅此一次返回
+             else if (path.equals("/api/v1/admin/personal-code")) {
+                 bindingController.handleIssuePersonalCode(request, response);
+             }
+             // QQ Bot 凭识别码认领 QQ 号
+             else if (path.equals("/api/v1/bot/bind")) {
+                 bindingController.handleBotBind(request, response);
+             }
+             // 外部渠道 (QQ #say) 向游戏内公屏发言
+             else if (path.equals("/api/v1/server/broadcast")) {
+                 if (chatBridgeHandler != null) {
+                     chatBridgeHandler.handleBroadcast(request, response);
+                 } else {
+                     send503Response(response, "Chat bridge handler not available");
+                 }
+             }
             else {
                 send404Response(response, "API endpoint not found");
             }
@@ -332,8 +362,12 @@ public class ApiRouter extends HttpServlet {
         }
         
         try {
+             // 解除 QQ 绑定 (?qq=)
+             if (path.equals("/api/v1/bot/binding")) {
+                 bindingController.handleBotUnbind(request, response);
+             }
              // 白名单删除路由
-             if (path.startsWith("/api/v1/whitelist/by-name/")) {
+             else if (path.startsWith("/api/v1/whitelist/by-name/")) {
                  // 通过名称删除
                  String name = path.substring("/api/v1/whitelist/by-name/".length());
                  whitelistController.handleRemovePlayerByName(request, response, name);
