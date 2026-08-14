@@ -51,13 +51,21 @@ public final class AuthChannel {
                 .decoder(C2SResponse::decode)
                 .consumerMainThread(C2SResponse::handle)
                 .add();
+        // 追加在末尾: 保持既有两个包的 id 不变, 老客户端连本服时 id 0/1 仍然对得上
+        CHANNEL.messageBuilder(C2SHello.class, packetId++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(C2SHello::encode)
+                .decoder(C2SHello::decode)
+                .consumerMainThread(C2SHello::handle)
+                .add();
     }
 
     public static void sendTo(ServerPlayer player, Object msg) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), msg);
     }
 
-    /** 该玩家客户端是否装了本 mod (注册了本通道)。 */
+    /** 该玩家客户端是否装了本 mod (注册了本通道)。
+     *  注意: 这是"此刻的通道视图", 在 Connector/兼容层下可能晚于进服事件才为真, 甚至一直为假,
+     *  故它只作加速判定, 不能当作唯一依据 —— 权威依据是客户端主动发来的 C2SHello。 */
     public static boolean clientHasMod(ServerPlayer player) {
         Connection conn = player.connection.connection;
         return CHANNEL.isRemotePresent(conn);

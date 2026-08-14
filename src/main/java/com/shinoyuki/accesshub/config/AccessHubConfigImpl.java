@@ -129,9 +129,10 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("auth.device-auth.enabled", true);
         config.setComment("auth.device-auth.enabled",
                 " 免密登录二期: 装了本 mod 的客户端进服时服务端用设备公钥验签自动解冻; 没装/验签失败静默回退密码登录");
-        config.set("auth.device-auth.challenge-timeout-seconds", 5);
+        config.set("auth.device-auth.challenge-timeout-seconds", 15);
         config.setComment("auth.device-auth.challenge-timeout-seconds",
-                " 免密挑战宽限秒数, 必须远小于 auth.timeout-seconds, 否则未装 mod 的玩家会在能 /login 前被踢");
+                " 免密挑战宽限秒数: 客户端须在此秒数内完成解密私钥+签名+回包. 整合包进服瞬间主线程卡顿时"
+                        + " 5 秒偏紧, 故默认 15. 服务端最多重发 3 次, 因此本值乘 3 必须小于 auth.timeout-seconds");
 
         config.set("backup.enabled", true);
         config.set("backup.schedule", "0:2:0");
@@ -319,7 +320,7 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
     @Override public boolean isPlayerAuthRejectWeakPassword()   { return config.getOrElse("auth.reject-weak-password", true); }
     @Override public int     getPlayerAuthCodeExpiryMinutes()   { return config.getIntOrElse("auth.code-expiry-minutes", 1440); }
     @Override public boolean isDeviceAuthEnabled()                  { return config.getOrElse("auth.device-auth.enabled", true); }
-    @Override public int     getDeviceAuthChallengeTimeoutSeconds(){ return config.getIntOrElse("auth.device-auth.challenge-timeout-seconds", 5); }
+    @Override public int     getDeviceAuthChallengeTimeoutSeconds(){ return config.getIntOrElse("auth.device-auth.challenge-timeout-seconds", 15); }
     @Override public String  getServerInstanceId()                 { return config.getOrElse("auth.device-auth.server-instance-id", ""); }
 
     @Override public boolean isBackupEnabled()       { return config.getOrElse("backup.enabled", true); }

@@ -139,9 +139,10 @@ public final class PlayerAuthListener {
             player.sendSystemMessage(Component.literal("§7例: §f/register abcd1234 abcd1234 §7(密码自己定, 两次输一样即可)"));
         }
 
-        // 免密 (best-effort): 有设备公钥 + 客户端装了本 mod 则自动挑战-验签解冻; 失败由上面的密码提示兜底
+        // 免密 (best-effort): 有设备公钥 + 客户端装了本 mod 则自动挑战-验签解冻; 失败由上面的密码提示兜底。
+        // 此刻通道可能尚未协商完 (Connector), 发不出去不要紧: 客户端 hello 与 onPlayerTick 复检会补发
         if (deviceAuthServer != null) {
-            deviceAuthServer.maybeChallengeOnJoin(player);
+            deviceAuthServer.onPlayerJoin(player);
         }
     }
 
@@ -191,6 +192,12 @@ public final class PlayerAuthListener {
                 joinedAt.remove(uuid);
                 return;
             }
+        }
+
+        // 免密握手复检: 客户端通道晚就绪时补发挑战, 挑战超时时重发并落日志.
+        // 必须按 tick 复检 —— 进服那一刻的 isRemotePresent 在 Connector 下常常还是 false, 只判一次会永久漏发.
+        if (deviceAuthServer != null) {
+            deviceAuthServer.tick(sp);
         }
 
         // 物品栏硬化 (协议无关, 每 tick 服务端复位): 关闭任意非默认容器, 清空光标 (carried) 物品并重新下发,
