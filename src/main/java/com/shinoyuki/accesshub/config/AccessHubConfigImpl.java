@@ -181,8 +181,10 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
                         "wuhan.mcwok.cn:25565", "wss://wuhan.mcwok.cn/probe"),
                 defaultNode("guangzhou", "广州线", 25606,
                         "guangzhou.mcwok.cn:25565", "wss://guangzhou.mcwok.cn/probe"),
-                defaultNode("xiamen", "厦门家宽直连", 25607,
-                        "xiamen.mcwok.cn:25565", "wss://xiamen.mcwok.cn/probe")
+                // 家宽线不在 mcwok.cn 下: shinoyuki.cn 在自己账号下才能让证书 DNS-01 自动续期,
+                // 探针带 :8443 是因为厦门联通对家宽入站封了 80/443/8080/53
+                defaultNode("xiamen", "厦门联通专线", 25607,
+                        "home.shinoyuki.cn:25565", "wss://home.shinoyuki.cn:8443/probe")
         )));
         config.setComment("network.nodes",
                 " 线路定义. listen-port 是本机入口端口, 须与 frpc 配置里该线路 proxy 的 localPort 对应;\n"
