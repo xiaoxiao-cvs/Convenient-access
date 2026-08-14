@@ -50,6 +50,7 @@ import com.shinoyuki.accesshub.net.ProbeServer;
 import com.shinoyuki.accesshub.operation.OperationLogDao;
 import com.shinoyuki.accesshub.whitelist.WhitelistManager;
 
+import net.minecraft.commands.Commands;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
@@ -83,6 +84,9 @@ public final class AccessHubMod {
     private NodeRelayServer nodeRelayServer;
     private ProbeServer probeServer;
 
+    /** 本次运行是否真的启用了服务端业务 (仅专用服务器). 内置服务器下恒为 false, 关服钩子据此完全静默。 */
+    private boolean serverSideActive;
+
     public AccessHubMod() {
         MinecraftForge.EVENT_BUS.register(this);
         // MOD bus: 注册免密自定义网络通道 (须在 FMLCommonSetupEvent, 早于 ServerStarting)
@@ -91,9 +95,11 @@ public final class AccessHubMod {
     }
 
     private void onCommonSetup(final FMLCommonSetupEvent event) {
-        // 通道注册写全局状态, 包进 enqueueWork 保证串行化
+        // 通道注册写全局状态, 包进 enqueueWork 保证串行化。
+        // 双端都要注册: 客户端 jar 也得有这条通道才能连专用服务器免密, 故这里不能按 dist 分支跳过。
+        // 用 debug 级: 单人存档下本 mod 不该在控制台留下运行痕迹, 需要排查时看 logs/debug.log。
         event.enqueueWork(AuthChannel::register);
-        LOGGER.info("DeviceAuth 网络通道已注册");
+        LOGGER.debug("DeviceAuth 网络通道已注册");
     }
 
     @SubscribeEvent
@@ -105,9 +111,12 @@ public final class AccessHubMod {
         // 在出生点却无注册码可用 -> 单人进不去。故内置服务器整体跳过服务端初始化, 使装了本 mod 的客户端单人存档
         // 完全透明可玩 (客户端侧只保留 DeviceAuth 免密通道, 仅在连入专用服务器时才生效)。
         if (!server.isDedicatedServer()) {
-            LOGGER.info("AccessHub 运行于内置服务器 (单人/局域网), 跳过服务端初始化: 白名单/HTTP/认证均不启用, 单人存档不受影响");
+            // debug 级: 单人存档下本 mod 对玩家应当完全无感, 控制台不留自己的运行日志
+            LOGGER.debug("AccessHub 运行于内置服务器 (单人/局域网), 跳过服务端初始化: 白名单/HTTP/认证均不启用");
             return;
         }
+        // 先置位再 initialize: 初始化中途失败也要让关服钩子回收已经建好的那部分资源
+        serverSideActive = true;
         try {
             // 传入 MinecraftServer 供 PlayerDataHandler 在主线程采集玩家数据
             initialize(server);
@@ -281,6 +290,10 @@ public final class AccessHubMod {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        if (!serverSideActive) {
+            return; // 内置服务器: 什么都没启动过, 退出单人世界时也不该刷关服日志
+        }
+        serverSideActive = false;
         LOGGER.info("AccessHub 正在关闭...");
         // 每步独立 try/catch + catch Throwable: 关闭钩子绝不能崩掉关服流程, 且任一步失败不影响后续。
         // 尤其 httpServer.stop() 在 Forge SecureJar 下可能抛 NoClassDefFoundError (relocate 的 Jetty 关闭期
@@ -306,8 +319,14 @@ public final class AccessHubMod {
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
+        // 内置服务器 (单人存档 / 对局域网开放) 整体跳过服务端初始化, 这些命令在那里必然报"未就绪",
+        // 只会污染单人世界的命令补全并和别的 mod 抢 /login 这类通名. 与 onServerStarting 的门禁口径一致.
+        // 注意不能改判 !=DEDICATED: 数据生成等场景用的是 ALL, 这里只排除 INTEGRATED.
+        if (event.getCommandSelection() == Commands.CommandSelection.INTEGRATED) {
+            return;
+        }
         AccessHubCommand.register(event.getDispatcher(), this);
-        // 玩家自助认证命令 (不要求 OP). 无条件注册, 依赖在执行期经 getPlayerAuthService 惰性解析,
+        // 玩家自助认证命令 (不要求 OP). 依赖在执行期经 getPlayerAuthService 惰性解析,
         // 因 RegisterCommandsEvent 在 initialize 之前的 bootstrap 即触发, 与 AccessHubCommand 同模式.
         AuthCommand.register(event.getDispatcher(), this);
         EnrollCommand.register(event.getDispatcher(), this);
