@@ -132,7 +132,8 @@ public final class AccessHubConfigImpl implements AccessHubConfig {
         config.set("auth.device-auth.challenge-timeout-seconds", 15);
         config.setComment("auth.device-auth.challenge-timeout-seconds",
                 " 免密挑战宽限秒数: 客户端须在此秒数内完成解密私钥+签名+回包. 整合包进服瞬间主线程卡顿时"
-                        + " 5 秒偏紧, 故默认 15. 服务端最多重发 3 次, 因此本值乘 3 必须小于 auth.timeout-seconds");
+                        + " 5 秒偏紧, 故默认 15. 服务端按本值的三分之二重发, 最多 4 次, 总重试窗口约为本值的 3 倍,"
+                        + " 必须小于 auth.timeout-seconds, 否则玩家会在免密还没试完时就被踢");
 
         config.set("backup.enabled", true);
         config.set("backup.schedule", "0:2:0");

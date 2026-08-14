@@ -19,6 +19,7 @@ import com.shinoyuki.accesshub.deviceauth.net.AuthChannel;
 import com.shinoyuki.accesshub.deviceauth.net.S2CChallenge;
 import com.shinoyuki.accesshub.event.PlayerAuthListener;
 
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -33,7 +34,10 @@ import net.minecraft.server.level.ServerPlayer;
  *  1. 进服 (onPlayerJoin): 通道已就绪时立即发, 最快;
  *  2. 客户端 hello (onClientHello): 客户端进入 PLAY 且本地玩家已创建后主动宣告, 不依赖服务端的通道视图,
  *     是 Connector/兼容层下唯一可靠的路径;
- *  3. 每 tick 复检 (tick): 通道晚就绪时补发, 挑战超时后重发, 直到 MAX_AUTH_ATTEMPTS 用尽。
+ *  3. 每 tick 复检 (tick): 通道晚就绪时补发, 按 retryIntervalMillis 重发, 直到 MAX_AUTH_ATTEMPTS 用尽。
+ *
+ * 重发的两条纪律 (细节见 DeviceAuthSession): 重发间隔短于挑战有效期, 使新旧挑战有重叠期;
+ * 验签在飞时既不重发也不受理新应答, 免得一次慢查询把重试次数烧光。
  */
 public final class DeviceAuthServer {
 
@@ -58,7 +62,7 @@ public final class DeviceAuthServer {
         // hello 有可能先于 PlayerLoggedInEvent 到达 (本机/低延迟连接), 那时会话已由 hello 建好, 这里复用
         DeviceAuthSession session = sessions.computeIfAbsent(player.getUUID(), k -> new DeviceAuthSession());
         session.markJoined(evaluateEligible(player));
-        tryIssueAuth(player, session);
+        tryIssueAuth(player, session, System.currentTimeMillis());
     }
 
     /**
@@ -72,7 +76,7 @@ public final class DeviceAuthServer {
             return; // 重复 hello: 忽略
         }
         logger.info("[免密] {} 客户端免密通道已就绪 (收到 hello)", player.getGameProfile().getName());
-        tryIssueAuth(player, session);
+        tryIssueAuth(player, session, System.currentTimeMillis());
     }
 
     /**
@@ -85,13 +89,14 @@ public final class DeviceAuthServer {
         if (session == null) {
             return;
         }
-        int expired = session.expire(System.currentTimeMillis(), challengeTimeoutMillis());
+        long now = System.currentTimeMillis();
+        int expired = session.expire(now, challengeTimeoutMillis());
         if (expired > 0) {
-            logger.info("[免密] {} 挑战超时未收到应答 (宽限 {}s, 已发 {} 次): 客户端可能仍在加载, 或本机密钥不可用",
-                    player.getGameProfile().getName(), config.getDeviceAuthChallengeTimeoutSeconds(),
+            logger.info("[免密] {} 有 {} 条挑战超时未被应答 (宽限 {}s, 已发 {} 次): 客户端可能仍在加载, 或本机密钥不可用",
+                    player.getGameProfile().getName(), expired, config.getDeviceAuthChallengeTimeoutSeconds(),
                     session.authAttempts());
         }
-        tryIssueAuth(player, session);
+        tryIssueAuth(player, session, now);
     }
 
     /** /enroll 授权通过后发 ENROLL 挑战. codeId>=0 表示成功后消费该注册码。 */
@@ -136,7 +141,7 @@ public final class DeviceAuthServer {
     }
 
     /** 发 AUTH 挑战的唯一入口 (进服 / hello / tick 复检共用)。 */
-    private void tryIssueAuth(ServerPlayer player, DeviceAuthSession session) {
+    private void tryIssueAuth(ServerPlayer player, DeviceAuthSession session, long now) {
         String username = player.getGameProfile().getName();
         if (session.authAttemptsExhausted()) {
             logger.info("[免密] {} 连续 {} 次挑战均无有效应答, 停止免密, 请 /login 密码登录",
@@ -144,7 +149,7 @@ public final class DeviceAuthServer {
             session.finishAuth();
             return;
         }
-        if (!session.canIssueAuth()) {
+        if (!session.canIssueAuth(now, retryIntervalMillis())) {
             return;
         }
         if (authService.isAuthed(player.getUUID())) {
@@ -186,6 +191,16 @@ public final class DeviceAuthServer {
         return config.getDeviceAuthChallengeTimeoutSeconds() * 1000L;
     }
 
+    /**
+     * 重发间隔: 取挑战有效期的三分之二 (至少 2 秒)。
+     *
+     * 刻意短于有效期, 使新旧挑战有一段重叠期 —— 客户端主线程卡顿后补上的应答总能落在某条仍然有效的
+     * nonce 上, 不会因为"旧的刚过期、新的刚发出"而落空被判成验签失败。
+     */
+    private long retryIntervalMillis() {
+        return Math.max(2000L, challengeTimeoutMillis() * 2 / 3);
+    }
+
     /** 收客户端响应 (服务器主线程, sender 为权威身份)。 */
     public void handleResponse(ServerPlayer sender, String phase, byte[] publicKey, byte[] signature) {
         final String username = sender.getGameProfile().getName();
@@ -195,49 +210,80 @@ public final class DeviceAuthServer {
             logger.info("[免密] {} 应答被丢弃: 无握手会话 (phase={})", username, phase);
             return;
         }
-        // 一次性取走该阶段全部挑战 (防重放). 重试期间可能有多条在飞, 逐条试签, 任一条通过即算数
-        List<Challenge> candidates = session.consume(phase, System.currentTimeMillis(), challengeTimeoutMillis());
+        // 只取快照不消费: 挑战留到验签通过才作废, 否则一条对旧 nonce 的迟到应答会顺手废掉客户端
+        // 还没来得及作答的新挑战 (nonce 单次使用由"通过即清空"保证, 见 DeviceAuthSession.endVerify)
+        List<Challenge> candidates = session.candidates(phase, System.currentTimeMillis(), challengeTimeoutMillis());
         if (candidates.isEmpty()) {
             if (authService.isAuthed(uuid)) {
-                return; // 多条挑战时后到的那条应答, 玩家已认证, 属正常不记
+                return; // 已认证后到达的应答, 属正常不记
             }
             logger.info("[免密] {} 应答被丢弃: 无匹配挑战或全部超时 (phase={}, 宽限 {}s)",
                     username, phase, config.getDeviceAuthChallengeTimeoutSeconds());
             return;
         }
+        if (!session.beginVerify()) {
+            logger.info("[免密] {} 应答被丢弃: 上一次验签尚未结束 (phase={})", username, phase);
+            return; // 同时只跑一次验签, 防被灌包空跑 Ed25519
+        }
         final String serverId = config.getServerInstanceId();
         final MinecraftServer server = sender.getServer();
         if (server == null) {
+            session.endVerify(false);
             return;
         }
+        // 连接代际锚: 异步期间玩家可能掉线并重连, 那时 UUID 相同但这是另一条连接。
+        // 旧连接的验签结果绝不能拿去认证新连接 (等于放行一次未经握手的登录)。
+        final Connection connection = sender.connection.connection;
         final boolean enroll = DeviceCrypto.PHASE_ENROLL.equals(phase);
         // DB 读/写 + 验签下沉到异步线程池 (与 AuthCommand.doLogin 范式一致, 绝不在主线程做阻塞 DB,
         // 尤其 touchLastUsed/upsert 这类写会抢 WAL 单写者锁, 繁忙库上可等满 busy_timeout 冻整服)。
-        // 回主线程只做 markAuthed + 解冻 + 发包, 并复查玩家仍在线 (异步期间可能掉线)。
+        // 回主线程只做 markAuthed + 解冻 + 发包, 并复查玩家仍在线且仍是同一条连接。
         CompletableFuture
                 .supplyAsync(() -> enroll
                         ? verifyEnroll(username, serverId, candidates, publicKey, signature)
                         : verifyAuth(username, serverId, candidates, signature))
-                .thenAccept(outcome -> server.execute(() -> {
-                    // 成功即终结; AUTH 失败也终结 —— 验签不过说明客户端密钥与库内公钥不配, 再重发是同样结果,
-                    // 停手交给密码登录。ENROLL 失败不影响 AUTH 重试节奏, 故不动。
-                    if (outcome.success || !enroll) {
-                        session.finishAuth();
-                    }
-                    ServerPlayer online = server.getPlayerList().getPlayer(uuid);
-                    if (online == null) {
-                        return; // 异步期间掉线, 不发包
-                    }
-                    if (outcome.success) {
-                        authService.markAuthed(uuid);
-                        PlayerAuthListener.liftRestrictions(online); // 立即解除失明/缓慢/无敌, 不留残留
-                    }
-                    online.sendSystemMessage(Component.literal((outcome.success ? "§a" : "§c") + outcome.message));
-                }))
-                .exceptionally(t -> {
-                    logger.warn("免密响应处理异常: {}", username, t);
-                    return null;
-                });
+                .whenComplete((outcome, error) -> server.execute(
+                        () -> applyOutcome(server, session, uuid, username, connection, enroll, outcome, error)));
+    }
+
+    /** 验签结果回主线程落地: 先解冻状态机, 再核对连接代际, 最后才 markAuthed / 发消息。 */
+    private void applyOutcome(MinecraftServer server, DeviceAuthSession session, UUID uuid, String username,
+                              Connection connection, boolean enroll, Outcome outcome, Throwable error) {
+        session.endVerify(outcome != null && outcome.success);
+        if (error != null || outcome == null) {
+            // 验签链路异常 (DB 挂了等): 不认证也不终结, 让后续重发再试一次
+            logger.warn("免密响应处理异常: {}", username, error);
+            return;
+        }
+        ServerPlayer online = server.getPlayerList().getPlayer(uuid);
+        if (online == null) {
+            return; // 异步期间掉线, 不发包
+        }
+        if (online.connection.connection != connection) {
+            logger.info("[免密] {} 验签结果属于已断开的旧连接, 丢弃 (玩家期间重连)", username);
+            return;
+        }
+        if (outcome.success) {
+            authService.markAuthed(uuid);
+            PlayerAuthListener.liftRestrictions(online); // 立即解除失明/缓慢/无敌, 不留残留
+            online.sendSystemMessage(Component.literal("§a" + outcome.message));
+            return;
+        }
+        if (enroll) {
+            online.sendSystemMessage(Component.literal("§c" + outcome.message)); // /enroll 是玩家主动发起的, 必须回话
+            return;
+        }
+        if (authService.isAuthed(uuid)) {
+            return; // 期间已用密码登录, 不再拿失败消息打扰
+        }
+        // AUTH 失败先别急着定性: 很可能只是客户端对一条早已超时的旧 nonce 迟到作答, 而非密钥真的不配。
+        // 还有重发机会就只记日志, 等下一条挑战; 没机会了才告知玩家并终结。
+        if (session.recordAuthFailure()) {
+            session.finishAuth();
+            online.sendSystemMessage(Component.literal("§c" + outcome.message));
+        } else {
+            logger.info("[免密] {} 本次验签未通过, 保留重发机会 (可能是迟到应答)", username);
+        }
     }
 
     /**
